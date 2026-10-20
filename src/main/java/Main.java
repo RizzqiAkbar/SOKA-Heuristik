@@ -1,4 +1,4 @@
-package com.example;
+package org.example;
 
 import org.cloudsimplus.allocationpolicies.VmAllocationPolicySimple;
 import org.cloudsimplus.brokers.DatacenterBroker;
@@ -17,39 +17,56 @@ import org.cloudsimplus.schedulers.vm.VmSchedulerTimeShared;
 import org.cloudsimplus.utilizationmodels.UtilizationModelDynamic;
 import org.cloudsimplus.vms.Vm;
 import org.cloudsimplus.vms.VmSimple;
-import org.cloudsimplus.util.Log;
-import ch.qos.logback.classic.Level;
 
 import java.io.BufferedReader;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
+/**
+ * Simulasi perbandingan algoritma (Max-Min, Min-Min, FCFS) dengan
+ * 3 Datacenter, 5 Host, dan 2 VM menggunakan dataset GoCJ.
+ */
 public class Main {
 
-    private static final int DATACENTER_COUNT = 3;
-    private static final int HOST_COUNT = 5; // host per datacenter
-    private static final int VM_COUNT = 10;
+    private static final int HOST_COUNT = 15; // 5 host per datacenter x 3 datacenter
+    private static final int VM_PER_HOST = 2;
+    private static final int VM_COUNT = HOST_COUNT * VM_PER_HOST; // 30 VM total
     private static final int[] TASK_SCENARIOS = buildScenarios();
-    private static final String[] ALGORITHMS = { "Max-Min", "Min-Min", "FCFS" };
+    private static final String[] ALGORITHMS = {"Max-Min", "Min-Min", "FCFS"};
 
     private static int[] buildScenarios() {
-        int[] arr = new int[19];
-        for (int i = 0; i < arr.length; i++) {
-            arr[i] = 100 + i * 50;
+        List<Integer> list = new ArrayList<>();
+        for (int n = 100; n <= 1000; n += 50) {
+            if (Main.class.getResource("/dataset/GoCJ_Dataset_" + n + ".txt") != null) {
+                list.add(n);
+            }
         }
-        return arr;
+        if (list.isEmpty()) {
+            return new int[]{100, 200, 500, 1000};
+        }
+        return list.stream().mapToInt(Integer::intValue).toArray();
     }
 
     private static final long HOST_SEED = 42;
     private static final long VM_SEED = 99;
 
     private static final double COST_PER_MIPS_SEC = 0.00001;
+    private static final double GAP_WARN_RATIO = 0.01;
+
     private static final List<String> csvRows = new ArrayList<>();
+    private static boolean allocationPrinted = false;
+    private static final Map<Long, Host> vmHost = new TreeMap<>();
+    private static final Map<Host, Datacenter> hostDatacenter = new IdentityHashMap<>();
+    private static final Map<Datacenter, String> dcLabel = new IdentityHashMap<>();
 
     private static class ScheduleResult {
         final Map<Cloudlet, Vm> assignment;
@@ -63,137 +80,56 @@ public class Main {
         }
     }
 
-    public static void main(String[] args) {
-        // Matikan log verbose internal dari CloudSim Plus agar terminal bersih
-        Log.setLevel(Level.OFF);
+    public static void main(String[] args) throws IOException {
+        String outDir = "output";
+        Files.createDirectories(Paths.get(outDir));
 
-        csvRows.add(
-                "Algoritma,N_Task,Prediksi_Makespan,Makespan_Aktual,Gap_Persen,Throughput,Utilization_Persen,Imbalance,Total_Cost");
-
-        // 1) Laporan infrastruktur: datacenter -> host -> VM
-        printInfrastructureAllocation();
-
-        // 2) Hasil simulasi per algoritma dan jumlah task
-        System.out.println("\n=================== HASIL SIMULASI ===================");
-        System.out.printf("%-10s | %-6s | %-13s | %-13s | %-8s | %-10s | %-9s | %-10s | %-10s%n",
-                "Algoritma", "Tasks", "Prediksi (s)", "Aktual (s)", "Gap (%)",
-                "Throughput", "Util (%)", "Imbalance", "Cost");
-        System.out.println("-".repeat(115));
-
-        for (String algo : ALGORITHMS) {
-            for (int taskCount : TASK_SCENARIOS) {
-                runScenario(algo, taskCount);
-            }
-            System.out.println("-".repeat(115));
-        }
-
-        writeCsv("hasil_metrik_perbandingan.csv");
-    }
-
-    // ------------------------------------------------------------------
-    // Pembuatan datacenter (dipakai simulasi DAN laporan alokasi)
-    // ------------------------------------------------------------------
-    private static List<Datacenter> createDatacenters(CloudSimPlus simulation) {
-        List<Datacenter> dcList = new ArrayList<>();
-        for (int i = 0; i < DATACENTER_COUNT; i++) {
-            // Ganti HOST_SEED dengan (HOST_SEED + i) jika ingin spesifikasi host tiap DC
-            // berbeda
-            dcList.add(new DatacenterSimple(simulation, createHosts(HOST_SEED), new VmAllocationPolicySimple()));
-        }
-        return dcList;
-    }
-
-    // Broker menyebar VM secara round-robin ke seluruh datacenter
-    private static DatacenterBroker createBroker(CloudSimPlus simulation, List<Datacenter> dcList) {
-        DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
-        int[] counter = { 0 };
-        broker.setDatacenterMapper((lastDc, vm) -> dcList.get(counter[0]++ % dcList.size()));
-        return broker;
-    }
-
-    // ------------------------------------------------------------------
-    // Laporan alokasi: Datacenter -> Host -> VM
-    // ------------------------------------------------------------------
-    private static void printInfrastructureAllocation() {
-        CloudSimPlus sim = new CloudSimPlus();
-        List<Datacenter> dcList = createDatacenters(sim);
-        List<Vm> vmList = createVms();
-
-        // Tangkap host tempat tiap VM dialokasikan
-        Map<Vm, Host> vmToHost = new IdentityHashMap<>();
-        for (Vm vm : vmList) {
-            vm.addOnHostAllocationListener(evt -> vmToHost.put(evt.getVm(), evt.getHost()));
-        }
-
-        DatacenterBroker broker = createBroker(sim, dcList);
-        broker.submitVmList(vmList);
-        sim.start();
-
-        System.out.println("\n=================== INFRASTRUKTUR & ALOKASI ===================");
-        System.out.println("Jumlah Datacenter : " + dcList.size());
-        System.out.println("Host per DC       : " + HOST_COUNT);
-        System.out.println("Total Host        : " + (dcList.size() * HOST_COUNT));
-        System.out.println("Total VM          : " + vmList.size());
-
-        Set<Vm> allocated = Collections.newSetFromMap(new IdentityHashMap<>());
-
-        for (int d = 0; d < dcList.size(); d++) {
-            Datacenter dc = dcList.get(d);
-            List<? extends Host> hosts = dc.getHostList();
-
-            int vmInDc = 0;
-            for (Host host : hosts) {
-                for (Vm vm : vmList) {
-                    if (vmToHost.get(vm) == host)
-                        vmInDc++;
+        PrintStream terminal = System.out;
+        try (PrintStream fileOut = new PrintStream(new FileOutputStream(outDir + "/output_terminal.txt"), false, StandardCharsets.UTF_8)) {
+            System.setOut(new PrintStream(new TeeOutputStream(fileOut, terminal), true));
+            csvRows.add("Algoritma,N_Task,Prediksi_Makespan,Makespan_Aktual,Gap_Persen,Throughput,Utilization_Persen,Imbalance,Total_Cost");
+            for (String algo : ALGORITHMS) {
+                for (int taskCount : TASK_SCENARIOS) {
+                    runScenario(algo, taskCount);
                 }
             }
-
-            System.out.printf("%n[DATACENTER %d] (ID: %d) | Host: %d | Total VM: %d%n",
-                    d + 1, dc.getId(), hosts.size(), vmInDc);
-
-            for (int h = 0; h < hosts.size(); h++) {
-                Host host = hosts.get(h);
-                System.out.printf("  Host %d (ID: %d | PEs: %d | MIPS/PE: %.0f | RAM: %d MB)%n",
-                        h + 1, host.getId(), host.getPesNumber(), host.getMips(),
-                        host.getRam().getCapacity());
-
-                boolean any = false;
-                for (Vm vm : vmList) {
-                    if (vmToHost.get(vm) == host) {
-                        any = true;
-                        allocated.add(vm);
-                        System.out.printf("      - VM %2d (MIPS: %4.0f | PEs: %d | RAM: %d MB)%n",
-                                vm.getId(), vm.getMips(), vm.getPesNumber(), vm.getRam().getCapacity());
-                    }
-                }
-                if (!any)
-                    System.out.println("      (tidak ada VM)");
-            }
+        } finally {
+            System.setOut(terminal);
         }
-
-        List<Vm> failed = new ArrayList<>();
-        for (Vm vm : vmList)
-            if (!allocated.contains(vm))
-                failed.add(vm);
-        if (!failed.isEmpty()) {
-            System.out.println("\n[VM TIDAK TERALOKASI]");
-            failed.forEach(vm -> System.out.printf("      - VM %2d (MIPS: %4.0f | PEs: %d)%n",
-                    vm.getId(), vm.getMips(), vm.getPesNumber()));
-        }
-        System.out.println("===============================================================");
+        writeCsv(outDir + "/hasil_metrik_perbandingan.csv");
     }
 
-    // ------------------------------------------------------------------
-    // Simulasi
-    // ------------------------------------------------------------------
     private static void runScenario(String algorithm, int taskCount) {
         CloudSimPlus simulation = new CloudSimPlus();
 
-        List<Datacenter> dcList = createDatacenters(simulation);
+        List<Host> hostList = createHosts();
+
+        // 3 Datacenter: bagi 5 host ke 3 datacenter
+        // 5 Host per Datacenter -> 3 Datacenter
+        List<Host> dc1Hosts = List.of(hostList.get(0), hostList.get(1), hostList.get(2), hostList.get(3), hostList.get(4));
+        List<Host> dc2Hosts = List.of(hostList.get(5), hostList.get(6), hostList.get(7), hostList.get(8), hostList.get(9));
+        List<Host> dc3Hosts = List.of(hostList.get(10), hostList.get(11), hostList.get(12), hostList.get(13), hostList.get(14));
+
+        Datacenter dc1 = new DatacenterSimple(simulation, dc1Hosts, new VmAllocationPolicySimple());
+        Datacenter dc2 = new DatacenterSimple(simulation, dc2Hosts, new VmAllocationPolicySimple());
+        Datacenter dc3 = new DatacenterSimple(simulation, dc3Hosts, new VmAllocationPolicySimple());
+
+        hostDatacenter.clear();
+        dcLabel.clear();
+        dcLabel.put(dc1, "DC1"); dcLabel.put(dc2, "DC2"); dcLabel.put(dc3, "DC3");
+        for (Host h : dc1Hosts) hostDatacenter.put(h, dc1);
+        for (Host h : dc2Hosts) hostDatacenter.put(h, dc2);
+        for (Host h : dc3Hosts) hostDatacenter.put(h, dc3);
+
         List<Vm> vmList = createVms();
 
-        DatacenterBroker broker = createBroker(simulation, dcList);
+        DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
+
+        // Distribusikan VM ke masing-masing Datacenter: 10 VM per DC (2 VM per host)
+        broker.setDatacenterMapper((defaultDc, vm) -> {
+            long vid = vm.getId();
+            return (vid < 10) ? dc1 : (vid < 20) ? dc2 : dc3;
+        });
         broker.submitVmList(vmList);
 
         List<Cloudlet> cloudletList = loadGoCJDataset(taskCount);
@@ -210,21 +146,53 @@ public class Main {
         }
         broker.submitCloudletList(sr.order);
 
+        vmHost.clear();
+        for (Vm vm : vmList) {
+            vm.addOnHostAllocationListener(e -> vmHost.put(e.getVm().getId(), e.getHost()));
+        }
+
         simulation.start();
 
+        printVmHostAllocation(hostList, vmList, List.of(dc1, dc2, dc3));
         printMetrics(algorithm, taskCount, broker, vmList, sr.predictedMakespan);
     }
 
-    private static List<Host> createHosts(long seed) {
+    private static void printVmHostAllocation(List<Host> hostList, List<Vm> vmList, List<Datacenter> datacenters) {
+        if (allocationPrinted) return;
+        allocationPrinted = true;
+
+        System.out.println("\n================== STRUKTUR & ALOKASI INFRASTRUKTUR ==================");
+        System.out.println("Total Datacenter: " + datacenters.size() + ", Total Host: " + hostList.size() + ", Total VM: " + vmList.size());
+
+        for (int i = 0; i < datacenters.size(); i++) {
+            System.out.printf("Datacenter %d (ID: %d) memiliki %d host%n",
+                    (i + 1), datacenters.get(i).getId(), datacenters.get(i).getHostList().size());
+        }
+
+        System.out.println("\n-- Detail Pemetaan VM -> Host -> Datacenter --");
+        for (Vm vm : vmList) {
+            Host h = vmHost.get(vm.getId());
+            if (h == null) {
+                System.out.printf("VM %-2d : TIDAK tercatat%n", vm.getId());
+                continue;
+            }
+            Datacenter dc = hostDatacenter.get(h);
+            System.out.printf("VM %-2d -> MIPS: %-4d, PEs: %d, RAM: %-4d MB | Berjalan di Host %-2d -> %s%n",
+                    vm.getId(), (long) vm.getMips(), vm.getPesNumber(), vm.getRam().getCapacity(),
+                    h.getId(), dcLabel.getOrDefault(dc, "DC?"));
+        }
+        System.out.println("=======================================================================\n");
+    }
+
+    private static List<Host> createHosts() {
         List<Host> hostList = new ArrayList<>();
-        Random rand = new Random(seed);
+        Random rand = new Random(HOST_SEED);
         for (int i = 0; i < HOST_COUNT; i++) {
             int peCount = 4 + rand.nextInt(13);
             long mipsPerPe = 1000 + rand.nextInt(2001);
             long ram = 4096 + rand.nextInt(12289);
             List<Pe> peList = new ArrayList<>();
-            for (int p = 0; p < peCount; p++)
-                peList.add(new PeSimple(mipsPerPe));
+            for (int p = 0; p < peCount; p++) peList.add(new PeSimple(mipsPerPe));
             Host host = new HostSimple(ram, 10_000, 1_000_000, peList);
             host.setVmScheduler(new VmSchedulerTimeShared());
             hostList.add(host);
@@ -248,24 +216,17 @@ public class Main {
     }
 
     private static List<Cloudlet> loadGoCJDataset(int n) {
-        String path = "/GoCJ_Dataset/GoCJ_Dataset_" + n + ".txt";
+        String path = "/dataset/GoCJ_Dataset_" + n + ".txt";
         List<Long> lengths = new ArrayList<>();
         try (InputStream is = Main.class.getResourceAsStream(path)) {
-            if (is != null) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    if (!line.isEmpty())
-                        lengths.add(Long.parseLong(line));
-                }
-            } else {
-                // Generasi synthetic dataset jika resource tidak ditemukan
-                Random rand = new Random(n * 31L);
-                for (int i = 0; i < n; i++) {
-                    long length = 1000 + rand.nextInt(9000);
-                    lengths.add(length);
-                }
+            if (is == null) {
+                throw new RuntimeException("File dataset tidak ditemukan di classpath: " + path);
+            }
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty()) lengths.add(Long.parseLong(line));
             }
         } catch (IOException e) {
             throw new RuntimeException("Gagal membaca " + path, e);
@@ -280,14 +241,10 @@ public class Main {
         return list;
     }
 
-    // ------------------------------------------------------------------
-    // Algoritma penjadwalan
-    // ------------------------------------------------------------------
     private static int fastestPe(double[][] avail, int vmIdx) {
         int best = 0;
         for (int p = 1; p < avail[vmIdx].length; p++) {
-            if (avail[vmIdx][p] < avail[vmIdx][best])
-                best = p;
+            if (avail[vmIdx][p] < avail[vmIdx][best]) best = p;
         }
         return best;
     }
@@ -304,8 +261,7 @@ public class Main {
         Map<Cloudlet, Vm> result = new IdentityHashMap<>();
         List<Cloudlet> order = new ArrayList<>();
         double[][] avail = new double[vms.size()][];
-        for (int j = 0; j < vms.size(); j++)
-            avail[j] = new double[(int) vms.get(j).getPesNumber()];
+        for (int j = 0; j < vms.size(); j++) avail[j] = new double[(int) vms.get(j).getPesNumber()];
 
         List<Cloudlet> remaining = new ArrayList<>(cloudlets);
         while (!remaining.isEmpty()) {
@@ -342,9 +298,7 @@ public class Main {
         }
 
         double predicted = 0;
-        for (double[] row : avail)
-            for (double t : row)
-                predicted = Math.max(predicted, t);
+        for (double[] row : avail) for (double t : row) predicted = Math.max(predicted, t);
         return new ScheduleResult(result, order, predicted);
     }
 
@@ -352,8 +306,7 @@ public class Main {
         Map<Cloudlet, Vm> result = new IdentityHashMap<>();
         List<Cloudlet> order = new ArrayList<>();
         double[][] avail = new double[vms.size()][];
-        for (int j = 0; j < vms.size(); j++)
-            avail[j] = new double[(int) vms.get(j).getPesNumber()];
+        for (int j = 0; j < vms.size(); j++) avail[j] = new double[(int) vms.get(j).getPesNumber()];
 
         for (Cloudlet c : cloudlets) {
             int bestVmIdx = -1, bestPeIdx = -1;
@@ -373,17 +326,11 @@ public class Main {
         }
 
         double predicted = 0;
-        for (double[] row : avail)
-            for (double t : row)
-                predicted = Math.max(predicted, t);
+        for (double[] row : avail) for (double t : row) predicted = Math.max(predicted, t);
         return new ScheduleResult(result, order, predicted);
     }
 
-    // ------------------------------------------------------------------
-    // Metrik
-    // ------------------------------------------------------------------
-    private static void printMetrics(String algorithm, int taskCount, DatacenterBroker broker, List<Vm> vmList,
-            double predictedMakespan) {
+    private static void printMetrics(String algorithm, int taskCount, DatacenterBroker broker, List<Vm> vmList, double predictedMakespan) {
         List<Cloudlet> finished = broker.getCloudletFinishedList();
 
         double makespan = finished.stream().mapToDouble(Cloudlet::getFinishTime).max().orElse(0);
@@ -405,8 +352,7 @@ public class Main {
             double finishJ = vmFinish.getOrDefault(vm, 0.0);
             double busyJ = vmBusy.getOrDefault(vm, 0.0);
             finishTimes[j] = finishJ;
-            if (makespan > 0)
-                utilSum += busyJ / (vm.getPesNumber() * makespan);
+            if (makespan > 0) utilSum += busyJ / (vm.getPesNumber() * makespan);
             totalCost += finishJ * vm.getMips() * vm.getPesNumber() * COST_PER_MIPS_SEC;
         }
         double avgUtilPct = 100.0 * utilSum / vmList.size();
@@ -417,22 +363,51 @@ public class Main {
 
         double gap = predictedMakespan > 0 ? Math.abs(makespan - predictedMakespan) / predictedMakespan : 0;
 
-        System.out.printf(Locale.US,
-                "%-10s | %-6d | %-13.2f | %-13.2f | %-8.2f | %-10.4f | %-9.2f | %-10.2f | %-10.2f%n",
-                algorithm, taskCount, predictedMakespan, makespan, gap * 100, throughput,
-                avgUtilPct, degreeOfImbalance, totalCost);
+        System.out.println("\n=== METRIK HASIL SIMULASI (" + algorithm + ", GoCJ) — N_Task=" + taskCount + " ===");
+        System.out.printf("Task selesai / diharapkan   : %d / %d%n", finished.size(), taskCount);
+        System.out.printf("Prediksi makespan (model)   : %.2f detik%n", predictedMakespan);
+        System.out.printf("Makespan aktual (simulasi)  : %.2f detik  (selisih %.2f%%)%n", makespan, gap * 100);
+        System.out.printf("Throughput                  : %.4f task/detik%n", throughput);
+
+        // Detail Penggunaan VM & Datacenter
+        System.out.println("\n-- Detail Penggunaan VM & Alokasi Datacenter --");
+        Map<Vm, Long> taskCountPerVm = finished.stream().collect(Collectors.groupingBy(Cloudlet::getVm, Collectors.counting()));
+        for (Vm vm : vmList) {
+            long count = taskCountPerVm.getOrDefault(vm, 0L);
+            Host h = vmHost.get(vm.getId());
+            Datacenter dc = h != null ? hostDatacenter.get(h) : null;
+            double busyJ = vmBusy.getOrDefault(vm, 0.0);
+            double utilJ = makespan > 0 ? (busyJ / (vm.getPesNumber() * makespan)) * 100 : 0;
+            System.out.printf("VM %d -> %s | Host ID: %d | MIPS: %-4d | PEs: %d | Task Selesai: %-4d | Utilisasi: %.2f%% | Finish Time: %.2fs%n",
+                    vm.getId(),
+                    dcLabel.getOrDefault(dc, "DC?"),
+                    h != null ? h.getId() : -1,
+                    (long) vm.getMips(),
+                    vm.getPesNumber(),
+                    count,
+                    utilJ,
+                    vmFinish.getOrDefault(vm, 0.0));
+        }
 
         csvRows.add(String.format(Locale.US, "%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
-                algorithm, taskCount, predictedMakespan, makespan, gap * 100, throughput, avgUtilPct, degreeOfImbalance,
-                totalCost));
+                algorithm, taskCount, predictedMakespan, makespan, gap * 100, throughput, avgUtilPct, degreeOfImbalance, totalCost));
+    }
+
+    private static class TeeOutputStream extends OutputStream {
+        private final OutputStream a, b;
+        TeeOutputStream(OutputStream a, OutputStream b) { this.a = a; this.b = b; }
+        public void write(int x) throws IOException { a.write(x); b.write(x); }
+        public void flush() throws IOException { a.flush(); b.flush(); }
+        public void close() throws IOException { try { a.close(); } finally { b.close(); } }
     }
 
     private static void writeCsv(String filename) {
         try {
             Files.write(Paths.get(filename), String.join("\n", csvRows).getBytes(StandardCharsets.UTF_8));
-            System.out.println("\nCSV berhasil disimpan ke: " + filename);
+            System.out.println("\nCSV ditulis ke: " + filename);
         } catch (IOException e) {
             System.out.println("Gagal menulis CSV: " + e.getMessage());
         }
     }
+
 }
