@@ -17,8 +17,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-CSV_PATH = "hasil_metrik_perbandingan.csv"
-OUT_DIR = "grafik"
+CSV_PATH = "output/hasil_metrik_perbandingan.csv"
+OUT_DIR = "output/grafik"
 
 # Palet warna beda-beda biar jelas per algoritma
 WARNA = {
