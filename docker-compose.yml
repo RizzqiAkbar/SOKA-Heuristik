@@ -24,6 +24,8 @@ services:
     environment:
       WORKER_ID: worker1
       HOST_ID: host1
+      CAPACITY: 1.0
+      ITERATIONS_PER_UNIT: 80000
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -37,6 +39,8 @@ services:
     environment:
       WORKER_ID: worker2
       HOST_ID: host1
+      CAPACITY: 1.5
+      ITERATIONS_PER_UNIT: 80000
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -50,6 +54,8 @@ services:
     environment:
       WORKER_ID: worker3
       HOST_ID: host2
+      CAPACITY: 0.8
+      ITERATIONS_PER_UNIT: 80000
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -63,6 +69,8 @@ services:
     environment:
       WORKER_ID: worker4
       HOST_ID: host2
+      CAPACITY: 1.2
+      ITERATIONS_PER_UNIT: 80000
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]

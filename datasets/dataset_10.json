@@ -1,0 +1,12 @@
+[
+  {"id": "T01", "workload": 4},
+  {"id": "T02", "workload": 18},
+  {"id": "T03", "workload": 6},
+  {"id": "T04", "workload": 28},
+  {"id": "T05", "workload": 5},
+  {"id": "T06", "workload": 32},
+  {"id": "T07", "workload": 8},
+  {"id": "T08", "workload": 22},
+  {"id": "T09", "workload": 7},
+  {"id": "T10", "workload": 14}
+]

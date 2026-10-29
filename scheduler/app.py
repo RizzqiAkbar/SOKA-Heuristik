@@ -1,3 +1,4 @@
+import math
 import os
 import time
 import threading
@@ -36,6 +37,7 @@ def get_workers():
             result.append({
                 "id": worker_id,
                 "host_id": info.get("host_id", "unknown"),
+                "capacity": float(info.get("capacity", 1.0)),
                 "url": worker_url(worker_id),
                 "online": True,
             })
@@ -43,6 +45,7 @@ def get_workers():
             result.append({
                 "id": worker_id,
                 "host_id": "unknown",
+                "capacity": 1.0,
                 "url": worker_url(worker_id),
                 "online": False,
             })
@@ -80,24 +83,6 @@ def max_min_schedule(tasks, workers):
         best_duration = 0.0
 
         for task in pending:
-            for worker in workers:
-                wid = worker["id"]
-                duration = float(task["workload"]) / max(capacities[wid], 0.001)
-                finish = available[wid] + duration
-
-                # Worker tercepat untuk tugas ini.
-                # Di antara nilai minimum setiap tugas, pilih yang terbesar.
-                if best_task is None:
-                    per_task_min_finish = finish
-                    per_task_min_worker = wid
-                    per_task_min_duration = duration
-                else:
-                    per_task_min_finish = finish
-                    per_task_min_worker = wid
-                    per_task_min_duration = duration
-
-                # Simpan minimum per task untuk dibandingkan di bawah.
-                # Perhitungan ini dilakukan eksplisit agar logika Max-Min jelas.
             task_candidates = []
             for worker in workers:
                 wid = worker["id"]
@@ -275,7 +260,7 @@ def run_tasks():
         workers_info = get_workers()
         online_ids = {w["id"] for w in workers_info if w["online"]}
         workers = [
-            {"id": w["id"], "host_id": w["host_id"], "capacity": 1.0}
+            {"id": w["id"], "host_id": w["host_id"], "capacity": float(w.get("capacity", 1.0))}
             for w in workers_info if w["online"]
         ]
         if not workers:
@@ -340,6 +325,35 @@ def run_tasks():
 
         makespan = time.perf_counter() - start
         results.sort(key=lambda item: item.get("task_id", ""))
+
+        predicted_makespan = max((a["estimated_finish_seconds"] for a in assignments), default=0.0)
+        gap_percentage = (
+            abs(makespan - predicted_makespan) / predicted_makespan * 100
+            if predicted_makespan > 0 else 0.0
+        )
+
+        worker_busy_times = {w["id"]: 0.0 for w in workers}
+        worker_task_counts = {w["id"]: 0 for w in workers}
+        for res in results:
+            wid = res.get("worker_id")
+            if wid in worker_busy_times:
+                worker_busy_times[wid] += res.get("execution_seconds", 0.0)
+                worker_task_counts[wid] += 1
+
+        total_busy = sum(worker_busy_times.values())
+        worker_count = len(workers)
+        utilization_percent = (
+            (total_busy / (worker_count * makespan)) * 100
+            if (worker_count > 0 and makespan > 0) else 0.0
+        )
+
+        mean_busy = total_busy / worker_count if worker_count > 0 else 0.0
+        variance = (
+            sum((b - mean_busy) ** 2 for b in worker_busy_times.values()) / worker_count
+            if worker_count > 0 else 0.0
+        )
+        degree_of_imbalance = math.sqrt(variance)
+
         response_body = {
             "algorithm": algorithm,
             "task_count": len(normalized_tasks),
@@ -348,16 +362,31 @@ def run_tasks():
             "results": results,
             "failures": failures,
             "metrics": {
-                "makespan_seconds": round(makespan, 6),
-                "completed_tasks": len(results),
-                "failed_tasks": len(failures),
+                "predicted_makespan_seconds": round(predicted_makespan, 4),
+                "actual_makespan_seconds": round(makespan, 6),
+                "gap_percentage": round(gap_percentage, 2),
                 "throughput_tasks_per_second": round(
                     len(results) / makespan, 6
                 ) if makespan > 0 else 0,
+                "average_utilization_percent": round(utilization_percent, 2),
+                "degree_of_imbalance": round(degree_of_imbalance, 4),
+                "completed_tasks": len(results),
+                "failed_tasks": len(failures),
+                "worker_stats": {
+                    wid: {
+                        "tasks_assigned": len(assignments_by_worker[wid]),
+                        "tasks_completed": worker_task_counts[wid],
+                        "busy_seconds": round(worker_busy_times[wid], 4),
+                        "utilization_percent": round(
+                            (worker_busy_times[wid] / makespan) * 100, 2
+                        ) if makespan > 0 else 0.0,
+                    }
+                    for wid in sorted(worker_busy_times.keys())
+                },
             },
             "note": (
                 "Makespan dan throughput diukur dari eksekusi nyata pada container "
-                "lokal; estimasi scheduler memakai workload dan kapasitas baseline."
+                "lokal; estimasi scheduler memakai workload dan kapasitas dinamis worker."
             ),
         }
         status_code = 207 if failures else 200

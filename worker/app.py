@@ -6,6 +6,8 @@ from flask import Flask, jsonify, request
 app = Flask(__name__)
 WORKER_ID = os.getenv("WORKER_ID", "worker-unknown")
 HOST_ID = os.getenv("HOST_ID", "host-unknown")
+CAPACITY = float(os.getenv("CAPACITY", "1.0"))
+ITERATIONS_PER_UNIT = int(os.getenv("ITERATIONS_PER_UNIT", "150000"))
 
 
 def perform_work(workload):
@@ -19,7 +21,7 @@ def perform_work(workload):
 
     start = time.perf_counter()
     digest = b"maxmin-demo"
-    iterations = units * 150_000
+    iterations = int(units * ITERATIONS_PER_UNIT / max(CAPACITY, 0.01))
     for i in range(iterations):
         digest = hashlib.sha256(digest + str(i).encode("utf-8")).digest()
     elapsed = time.perf_counter() - start
@@ -36,6 +38,7 @@ def index():
     return jsonify({
         "worker_id": WORKER_ID,
         "host_id": HOST_ID,
+        "capacity": CAPACITY,
         "message": "Worker aktif",
     })
 
@@ -46,6 +49,7 @@ def health():
         "status": "ok",
         "worker_id": WORKER_ID,
         "host_id": HOST_ID,
+        "capacity": CAPACITY,
     })
 
 
@@ -69,6 +73,7 @@ def execute():
         "task_id": task_id,
         "worker_id": WORKER_ID,
         "host_id": HOST_ID,
+        "capacity": CAPACITY,
         "workload": workload,
         **result,
     })
