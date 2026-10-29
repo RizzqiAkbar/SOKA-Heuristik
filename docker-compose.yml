@@ -1,0 +1,75 @@
+services:
+  scheduler:
+    build: ./scheduler
+    container_name: maxmin_scheduler
+    ports:
+      - "5000:5000"
+    environment:
+      WORKERS: "worker1,worker2,worker3,worker4"
+    depends_on:
+      worker1:
+        condition: service_healthy
+      worker2:
+        condition: service_healthy
+      worker3:
+        condition: service_healthy
+      worker4:
+        condition: service_healthy
+    networks:
+      - maxmin-net
+
+  worker1:
+    build: ./worker
+    container_name: maxmin_worker1
+    environment:
+      WORKER_ID: worker1
+      HOST_ID: host1
+    networks: [maxmin-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker2:
+    build: ./worker
+    container_name: maxmin_worker2
+    environment:
+      WORKER_ID: worker2
+      HOST_ID: host1
+    networks: [maxmin-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker3:
+    build: ./worker
+    container_name: maxmin_worker3
+    environment:
+      WORKER_ID: worker3
+      HOST_ID: host2
+    networks: [maxmin-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker4:
+    build: ./worker
+    container_name: maxmin_worker4
+    environment:
+      WORKER_ID: worker4
+      HOST_ID: host2
+    networks: [maxmin-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  maxmin-net:
+    driver: bridge
