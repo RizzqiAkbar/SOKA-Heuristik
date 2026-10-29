@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables & virtual environments
+.env
+.venv/
+venv/
+ENV/
+
+# Logs
+*.log
