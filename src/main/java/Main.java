@@ -37,9 +37,12 @@ import java.util.stream.Collectors;
  */
 public class Main {
 
-    private static final int HOST_COUNT = 15; // 5 host per datacenter x 3 datacenter
+    private static final int DC_COUNT = 3;      // jumlah datacenter
+    private static final int HOST_PER_DC = 5;   // host per datacenter
     private static final int VM_PER_HOST = 2;
-    private static final int VM_COUNT = HOST_COUNT * VM_PER_HOST; // 30 VM total
+    private static final int HOST_COUNT = DC_COUNT * HOST_PER_DC;
+    private static final int VM_COUNT = HOST_COUNT * VM_PER_HOST;
+    private static final int VM_PER_DC = HOST_PER_DC * VM_PER_HOST;
     private static final int[] TASK_SCENARIOS = buildScenarios();
     private static final String[] ALGORITHMS = {"Max-Min", "Min-Min", "FCFS"};
 
@@ -104,32 +107,24 @@ public class Main {
 
         List<Host> hostList = createHosts();
 
-        // 3 Datacenter: bagi 5 host ke 3 datacenter
-        // 5 Host per Datacenter -> 3 Datacenter
-        List<Host> dc1Hosts = List.of(hostList.get(0), hostList.get(1), hostList.get(2), hostList.get(3), hostList.get(4));
-        List<Host> dc2Hosts = List.of(hostList.get(5), hostList.get(6), hostList.get(7), hostList.get(8), hostList.get(9));
-        List<Host> dc3Hosts = List.of(hostList.get(10), hostList.get(11), hostList.get(12), hostList.get(13), hostList.get(14));
-
-        Datacenter dc1 = new DatacenterSimple(simulation, dc1Hosts, new VmAllocationPolicySimple());
-        Datacenter dc2 = new DatacenterSimple(simulation, dc2Hosts, new VmAllocationPolicySimple());
-        Datacenter dc3 = new DatacenterSimple(simulation, dc3Hosts, new VmAllocationPolicySimple());
-
+        List<Datacenter> datacenters = new ArrayList<>();
         hostDatacenter.clear();
         dcLabel.clear();
-        dcLabel.put(dc1, "DC1"); dcLabel.put(dc2, "DC2"); dcLabel.put(dc3, "DC3");
-        for (Host h : dc1Hosts) hostDatacenter.put(h, dc1);
-        for (Host h : dc2Hosts) hostDatacenter.put(h, dc2);
-        for (Host h : dc3Hosts) hostDatacenter.put(h, dc3);
+        for (int d = 0; d < DC_COUNT; d++) {
+            List<Host> dcHosts = new ArrayList<>(hostList.subList(d * HOST_PER_DC, (d + 1) * HOST_PER_DC));
+            Datacenter dc = new DatacenterSimple(simulation, dcHosts, new VmAllocationPolicySimple());
+            datacenters.add(dc);
+            dcLabel.put(dc, "DC" + (d + 1));
+            for (Host h : dcHosts) hostDatacenter.put(h, dc);
+        }
 
         List<Vm> vmList = createVms();
 
         DatacenterBroker broker = new DatacenterBrokerSimple(simulation);
 
-        // Distribusikan VM ke masing-masing Datacenter: 10 VM per DC (2 VM per host)
-        broker.setDatacenterMapper((defaultDc, vm) -> {
-            long vid = vm.getId();
-            return (vid < 10) ? dc1 : (vid < 20) ? dc2 : dc3;
-        });
+        // Distribusikan VM ke datacenter secara berurutan: VM_PER_DC VM per DC
+        broker.setDatacenterMapper((defaultDc, vm) ->
+                datacenters.get((int) Math.min(vm.getId() / VM_PER_DC, DC_COUNT - 1)));
         broker.submitVmList(vmList);
 
         List<Cloudlet> cloudletList = loadGoCJDataset(taskCount);
@@ -153,7 +148,7 @@ public class Main {
 
         simulation.start();
 
-        printVmHostAllocation(hostList, vmList, List.of(dc1, dc2, dc3));
+        printVmHostAllocation(hostList, vmList, datacenters);
         printMetrics(algorithm, taskCount, broker, vmList, sr.predictedMakespan);
     }
 
