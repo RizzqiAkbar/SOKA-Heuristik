@@ -1,0 +1,4 @@
+Dataset,Algoritma,N_Task,Prediksi_Makespan,Makespan_Aktual,Gap_Persen,Throughput,Utilization_Persen,Imbalance
+dataset_10.json,MAX-MIN,10,33.3333,3.8980,88.31,2.5654,93.84,0.2147
+dataset_10.json,MIN-MIN,10,42.5000,4.2000,90.12,2.3809,72.74,1.1422
+dataset_10.json,FCFS,10,47.5000,4.2955,90.96,2.3280,72.30,0.7615

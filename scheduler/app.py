@@ -1,216 +1,330 @@
-import math
 import os
+import json
 import time
+import math
+import sqlite3
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import requests
-from flask import Flask, jsonify, request
+import psutil
+
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from flask import Flask, jsonify, request, render_template
 
 app = Flask(__name__)
 
-WORKER_IDS = [
-    item.strip()
-    for item in os.getenv(
-        "WORKERS", "worker1,worker2,worker3,worker4"
-    ).split(",")
-    if item.strip()
-]
-WORKER_PORT = 8000
-REQUEST_TIMEOUT = 3600
-scheduler_lock = threading.Lock()
+DATABASE = os.getenv("DATABASE_PATH", "/app/data/experiments.db")
+INVENTORY = os.getenv("INVENTORY_PATH", "/app/infrastructure/inventory.json")
+DATASET = os.getenv("DATASET_PATH", "/app/dataset/tasks.json")
+
+workers_raw = os.getenv("WORKERS", "[]")
+try:
+    WORKERS = json.loads(workers_raw)
+except Exception:
+    WORKERS = []
+    for w in workers_raw.split(","):
+        w = w.strip()
+        if w:
+            WORKERS.append({
+                "id": w,
+                "url": f"http://{w}:8000",
+                "capacity": 1.0,
+                "host": "HOST-01",
+                "vm": f"VM-{w}"
+            })
+
+run_lock = threading.Lock()
 
 
-def worker_url(worker_id):
-    return f"http://{worker_id}:{WORKER_PORT}"
+def database():
+    os.makedirs(os.path.dirname(DATABASE), exist_ok=True)
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def get_workers():
-    result = []
-    for worker_id in WORKER_IDS:
+def initialize_database():
+    try:
+        with database() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS experiments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    algorithm TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    makespan REAL,
+                    throughput REAL,
+                    task_count INTEGER,
+                    results TEXT
+                )
+            """)
+    except Exception as e:
+        print(f"Warning: Database initialization error: {e}")
+
+
+def load_inventory():
+    paths = [INVENTORY, "infrastructure/inventory.json", "../infrastructure/inventory.json"]
+    for p in paths:
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as file:
+                return json.load(file)
+    return {"datacenters": []}
+
+
+def load_dataset():
+    paths = [DATASET, "datasets/tasks.json", "../datasets/tasks.json"]
+    for p in paths:
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as file:
+                return json.load(file)
+    return {"dataset_name": "Default Tasks", "tasks": []}
+
+
+def worker_status():
+    output = []
+    for worker in WORKERS:
         try:
-            response = requests.get(
-                f"{worker_url(worker_id)}/health", timeout=3
+            response = requests.get(worker["url"] + "/health", timeout=2)
+            online = response.ok
+        except requests.RequestException:
+            online = False
+
+        output.append({
+            **worker,
+            "status": "online" if online else "offline"
+        })
+    return output
+
+
+def schedule_tasks(tasks, algorithm):
+    algo_key = algorithm.lower().replace("-", "")
+    available = {w["id"]: 0.0 for w in WORKERS}
+    assignments = []
+    remaining = list(tasks)
+
+    while remaining:
+        candidates = []
+        for task in remaining:
+            estimates = []
+            for worker in WORKERS:
+                capacity = max(float(worker.get("capacity", 1)), 0.01)
+                completion = (
+                    available[worker["id"]]
+                    + float(task["workload"]) / capacity
+                )
+                estimates.append((completion, worker))
+
+            best_time, best_worker = min(estimates, key=lambda x: x[0])
+            candidates.append((task, best_worker, best_time))
+
+        if algo_key == "maxmin":
+            selected = max(candidates, key=lambda x: x[2])
+        elif algo_key == "minmin":
+            selected = min(candidates, key=lambda x: x[2])
+        else:  # FCFS
+            task = remaining[0]
+            worker = min(WORKERS, key=lambda w: available[w["id"]])
+            selected = (
+                task,
+                worker,
+                available[worker["id"]] + float(task["workload"]) / max(float(worker.get("capacity", 1)), 0.01)
+            )
+
+        task, worker, estimated = selected
+        assignments.append({
+            "task": task,
+            "task_id": task["id"],
+            "worker": worker,
+            "worker_id": worker["id"],
+            "estimated_completion": round(estimated, 4)
+        })
+        available[worker["id"]] = estimated
+        remaining.remove(task)
+
+    return assignments
+
+
+def execute_worker_queue(worker, assigned_tasks):
+    results = []
+    for assignment in assigned_tasks:
+        task = assignment["task"]
+        start = time.perf_counter()
+
+        try:
+            response = requests.post(
+                worker["url"] + "/execute",
+                json={
+                    "task_id": task["id"],
+                    "workload": int(task["workload"])
+                },
+                timeout=300
             )
             response.raise_for_status()
-            info = response.json()
-            result.append({
-                "id": worker_id,
-                "host_id": info.get("host_id", "unknown"),
-                "capacity": float(info.get("capacity", 1.0)),
-                "url": worker_url(worker_id),
-                "online": True,
-            })
-        except requests.RequestException:
-            result.append({
-                "id": worker_id,
-                "host_id": "unknown",
-                "capacity": 1.0,
-                "url": worker_url(worker_id),
-                "online": False,
-            })
-    return result
+            result = response.json()
+            result["status"] = "completed"
+        except Exception as error:
+            result = {
+                "task_id": task["id"],
+                "worker_id": worker["id"],
+                "status": "failed",
+                "execution_seconds": round(time.perf_counter() - start, 6),
+                "error": str(error)
+            }
+
+        result["scheduler_elapsed_seconds"] = round(time.perf_counter() - start, 6)
+        results.append(result)
+
+    return results
 
 
-def estimate_seconds(task, worker):
-    """
-    Estimasi waktu (detik) = workload / kapasitas worker.
-    Kapasitas di sini disetel sama untuk semua worker sebagai baseline.
-    Untuk eksperimen, sesuaikan capacity masing-masing worker.
-    """
-    workload = float(task["workload"])
-    capacity = float(worker.get("capacity", 1.0))
-    return workload / max(capacity, 0.001)
+def run_experiment(algorithm, tasks):
+    if not WORKERS:
+        raise ValueError("No workers configured")
 
+    statuses = worker_status()
+    offline = [w["id"] for w in statuses if w["status"] != "online"]
+    if offline:
+        raise RuntimeError("Offline workers: " + ", ".join(offline))
 
-def max_min_schedule(tasks, workers):
-    """
-    Max-Min:
-    1. Untuk setiap tugas yang belum dijadwalkan, cari worker dengan
-       predicted finish time terkecil.
-    2. Pilih tugas yang memiliki predicted finish time minimum terbesar.
-    3. Tetapkan tugas tersebut dan perbarui ketersediaan worker.
-    """
-    available = {w["id"]: 0.0 for w in workers}
-    capacities = {w["id"]: float(w.get("capacity", 1.0)) for w in workers}
-    assignments = []
-    pending = [dict(task) for task in tasks]
+    assignments = schedule_tasks(tasks, algorithm)
 
-    while pending:
-        best_task = None
-        best_worker = None
-        best_finish = -1.0
-        best_duration = 0.0
+    queues = {w["id"]: [] for w in WORKERS}
+    for assignment in assignments:
+        queues[assignment["worker"]["id"]].append(assignment)
 
-        for task in pending:
-            task_candidates = []
-            for worker in workers:
-                wid = worker["id"]
-                duration = float(task["workload"]) / max(capacities[wid], 0.001)
-                task_candidates.append((available[wid] + duration, wid, duration))
-            finish, wid, duration = min(task_candidates, key=lambda item: item[0])
+    started_at = datetime.now().isoformat(timespec="seconds")
+    wall_start = time.perf_counter()
+    all_results = []
 
-            if finish > best_finish:
-                best_finish = finish
-                best_task = task
-                best_worker = wid
-                best_duration = duration
+    with ThreadPoolExecutor(max_workers=len(WORKERS)) as executor:
+        futures = []
+        for worker in WORKERS:
+            if queues[worker["id"]]:
+                futures.append(
+                    executor.submit(
+                        execute_worker_queue,
+                        worker,
+                        queues[worker["id"]]
+                    )
+                )
+        for future in futures:
+            all_results.extend(future.result())
 
-        assignments.append({
-            "task_id": best_task["id"],
-            "worker_id": best_worker,
-            "host_id": next(
-                (w.get("host_id", "unknown") for w in workers
-                 if w["id"] == best_worker),
-                "unknown"
-            ),
-            "workload": float(best_task["workload"]),
-            "estimated_duration_seconds": round(best_duration, 4),
-            "estimated_finish_seconds": round(best_finish, 4),
-        })
-        available[best_worker] += best_duration
-        pending.remove(best_task)
+    makespan = time.perf_counter() - wall_start
+    finished_at = datetime.now().isoformat(timespec="seconds")
 
-    return assignments
+    completed = sum(1 for r in all_results if r.get("status") == "completed")
+    throughput = completed / makespan if makespan > 0 else 0.0
 
+    assignment_lookup = {str(a["task"]["id"]): a for a in assignments}
+    for result in all_results:
+        tid = str(result.get("task_id", ""))
+        assignment = assignment_lookup.get(tid)
+        if assignment:
+            worker = assignment["worker"]
+            result["host_id"] = worker.get("host", "unknown")
+            result["vm_id"] = worker.get("vm", "unknown")
+            result["estimated_completion"] = assignment["estimated_completion"]
 
-def min_min_schedule(tasks, workers):
-    """Pembanding Min-Min: pilih tugas dengan minimum finish time terkecil."""
-    available = {w["id"]: 0.0 for w in workers}
-    capacities = {w["id"]: float(w.get("capacity", 1.0)) for w in workers}
-    pending = [dict(task) for task in tasks]
-    assignments = []
-
-    while pending:
-        candidates = []
-        for task in pending:
-            for worker in workers:
-                wid = worker["id"]
-                duration = float(task["workload"]) / max(capacities[wid], 0.001)
-                finish = available[wid] + duration
-                candidates.append((finish, task, wid, duration))
-
-        finish, task, wid, duration = min(candidates, key=lambda item: item[0])
-        assignments.append({
-            "task_id": task["id"],
-            "worker_id": wid,
-            "host_id": next(
-                (w.get("host_id", "unknown") for w in workers if w["id"] == wid),
-                "unknown"
-            ),
-            "workload": float(task["workload"]),
-            "estimated_duration_seconds": round(duration, 4),
-            "estimated_finish_seconds": round(finish, 4),
-        })
-        available[wid] += duration
-        pending.remove(task)
-
-    return assignments
-
-
-def fcfs_schedule(tasks, workers):
-    """Pembanding FCFS: urutan tugas mengikuti input, worker paling cepat tersedia."""
-    available = {w["id"]: 0.0 for w in workers}
-    capacities = {w["id"]: float(w.get("capacity", 1.0)) for w in workers}
-    assignments = []
-
-    for task in tasks:
-        candidates = []
-        for worker in workers:
-            wid = worker["id"]
-            duration = float(task["workload"]) / max(capacities[wid], 0.001)
-            candidates.append((available[wid] + duration, wid, duration, worker))
-        finish, wid, duration, worker = min(candidates, key=lambda item: item[0])
-        assignments.append({
-            "task_id": task["id"],
-            "worker_id": wid,
-            "host_id": worker.get("host_id", "unknown"),
-            "workload": float(task["workload"]),
-            "estimated_duration_seconds": round(duration, 4),
-            "estimated_finish_seconds": round(finish, 4),
-        })
-        available[wid] += duration
-
-    return assignments
-
-
-def execute_assignment(assignment, task_lookup):
-    wid = assignment["worker_id"]
-    payload = {
-        "task_id": assignment["task_id"],
-        "workload": task_lookup[assignment["task_id"]]["workload"],
-    }
-    started = time.perf_counter()
-    response = requests.post(
-        f"{worker_url(wid)}/execute",
-        json=payload,
-        timeout=REQUEST_TIMEOUT,
+    predicted_makespan = max((a["estimated_completion"] for a in assignments), default=0.0)
+    gap_percentage = (
+        abs(makespan - predicted_makespan) / predicted_makespan * 100
+        if predicted_makespan > 0 else 0.0
     )
-    elapsed = time.perf_counter() - started
-    response.raise_for_status()
-    result = response.json()
-    result["scheduler_round_trip_seconds"] = round(elapsed, 6)
-    return result
+
+    worker_busy_times = {w["id"]: 0.0 for w in WORKERS}
+    worker_task_counts = {w["id"]: 0 for w in WORKERS}
+    for res in all_results:
+        wid = res.get("worker_id")
+        if wid in worker_busy_times:
+            worker_busy_times[wid] += res.get("execution_seconds", 0.0)
+            worker_task_counts[wid] += 1
+
+    total_busy = sum(worker_busy_times.values())
+    worker_count = len(WORKERS)
+    utilization_percent = (
+        (total_busy / (worker_count * makespan)) * 100
+        if (worker_count > 0 and makespan > 0) else 0.0
+    )
+    mean_busy = total_busy / worker_count if worker_count > 0 else 0.0
+    variance = (
+        sum((b - mean_busy) ** 2 for b in worker_busy_times.values()) / worker_count
+        if worker_count > 0 else 0.0
+    )
+    degree_of_imbalance = math.sqrt(variance)
+
+    metrics = {
+        "predicted_makespan_seconds": round(predicted_makespan, 4),
+        "actual_makespan_seconds": round(makespan, 6),
+        "gap_percentage": round(gap_percentage, 2),
+        "throughput_tasks_per_second": round(throughput, 4),
+        "average_utilization_percent": round(utilization_percent, 2),
+        "degree_of_imbalance": round(degree_of_imbalance, 4),
+        "completed_tasks": completed,
+        "failed_tasks": len(tasks) - completed,
+        "worker_stats": {
+            wid: {
+                "tasks_assigned": sum(1 for a in assignments if a["worker"]["id"] == wid),
+                "tasks_completed": worker_task_counts[wid],
+                "busy_seconds": round(worker_busy_times[wid], 4),
+                "utilization_percent": round(
+                    (worker_busy_times[wid] / makespan) * 100, 2
+                ) if makespan > 0 else 0.0,
+            }
+            for wid in sorted(worker_busy_times.keys())
+        }
+    }
+
+    experiment = {
+        "algorithm": algorithm.upper(),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "makespan": round(makespan, 6),
+        "throughput": round(throughput, 4),
+        "task_count": len(tasks),
+        "completed": completed,
+        "failed": len(tasks) - completed,
+        "metrics": metrics,
+        "assignments": [
+            {
+                "task_id": a["task"]["id"],
+                "workload": a["task"]["workload"],
+                "worker": a["worker"]["id"],
+                "worker_id": a["worker"]["id"],
+                "host": a["worker"].get("host", "unknown"),
+                "vm": a["worker"].get("vm", "unknown"),
+                "estimated_completion": a["estimated_completion"]
+            }
+            for a in assignments
+        ],
+        "results": all_results
+    }
+
+    try:
+        with database() as conn:
+            conn.execute("""
+                INSERT INTO experiments
+                (algorithm, started_at, finished_at, makespan,
+                 throughput, task_count, results)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                experiment["algorithm"],
+                started_at,
+                finished_at,
+                experiment["makespan"],
+                experiment["throughput"],
+                len(tasks),
+                json.dumps(experiment)
+            ))
+    except Exception as e:
+        print(f"Warning: Failed to save experiment to DB: {e}")
+
+    return experiment
 
 
 @app.get("/")
-def index():
-    return jsonify({
-        "project": "Max-Min Scheduling Self-Hosted Demo",
-        "endpoints": {
-            "GET /health": "status scheduler",
-            "GET /workers": "status semua worker",
-            "POST /run": "jadwalkan dan eksekusi tugas",
-        },
-        "run_example": {
-            "algorithm": "max-min",
-            "tasks": [
-                {"id": "T1", "workload": 4},
-                {"id": "T2", "workload": 8},
-                {"id": "T3", "workload": 3},
-            ],
-        },
-    })
+def dashboard():
+    return render_template("index.html")
 
 
 @app.get("/health")
@@ -219,181 +333,147 @@ def health():
 
 
 @app.get("/workers")
-def workers_status():
-    return jsonify({"workers": get_workers()})
+def api_workers():
+    statuses = worker_status()
+    workers_list = [
+        {
+            "id": w["id"],
+            "host_id": w.get("host", "unknown"),
+            "capacity": float(w.get("capacity", 1.0)),
+            "online": w["status"] == "online",
+            "url": w.get("url", "")
+        }
+        for w in statuses
+    ]
+    return jsonify({"workers": workers_list})
+
+
+@app.get("/api/status")
+def api_status():
+    inventory = load_inventory()
+    datacenters = inventory.get("datacenters", [])
+
+    hosts = [
+        host
+        for dc in datacenters
+        for host in dc.get("hosts", [])
+    ]
+
+    vms = [
+        vm
+        for host in hosts
+        for vm in host.get("vms", [])
+    ]
+
+    workers = worker_status()
+
+    return jsonify({
+        "datacenter_count": len(datacenters),
+        "host_count": len(hosts),
+        "vm_count": len(vms),
+        "workers": workers,
+        "inventory": inventory,
+        "scheduler_resources": {
+            "cpu_percent": psutil.cpu_percent(interval=0.2),
+            "ram_percent": psutil.virtual_memory().percent,
+            "ram_total_gb": round(
+                psutil.virtual_memory().total / 1024**3, 2
+            )
+        }
+    })
+
+
+@app.get("/api/dataset")
+def api_dataset():
+    return jsonify(load_dataset())
+
+
+@app.post("/api/run")
+def api_run():
+    if not run_lock.acquire(blocking=False):
+        return jsonify({"error": "An experiment is already running"}), 409
+
+    try:
+        data = request.get_json(silent=True) or {}
+        algorithm = data.get("algorithm", "maxmin")
+
+        # Use tasks provided or fallback to dataset
+        tasks = data.get("tasks")
+        if not tasks:
+            dataset = load_dataset()
+            tasks = dataset.get("tasks", [])
+
+        if not tasks:
+            return jsonify({"error": "Dataset is empty"}), 400
+
+        result = run_experiment(algorithm, tasks)
+        return jsonify(result)
+
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
+
+    finally:
+        run_lock.release()
 
 
 @app.post("/run")
 def run_tasks():
-    if not scheduler_lock.acquire(blocking=False):
-        return jsonify({"error": "Scheduler sedang menjalankan batch lain."}), 409
+    if not run_lock.acquire(blocking=False):
+        return jsonify({"error": "Scheduler is busy running another batch"}), 409
 
     try:
         body = request.get_json(silent=True) or {}
-        algorithm = str(body.get("algorithm", "max-min")).lower()
+        algorithm = body.get("algorithm", "max-min")
         tasks = body.get("tasks", [])
 
+        if isinstance(tasks, dict) and "tasks" in tasks:
+            tasks = tasks["tasks"]
+
         if not isinstance(tasks, list) or not tasks:
-            return jsonify({
-                "error": "Field 'tasks' harus berupa list yang tidak kosong."
-            }), 400
+            return jsonify({"error": "Field 'tasks' must be a non-empty list."}), 400
 
-        normalized_tasks = []
-        seen_ids = set()
-        for index, task in enumerate(tasks, start=1):
-            if not isinstance(task, dict):
-                return jsonify({"error": f"Tugas ke-{index} harus berupa object."}), 400
-            task_id = str(task.get("id", f"T{index}"))
-            try:
-                workload = float(task["workload"])
-            except (KeyError, TypeError, ValueError):
-                return jsonify({
-                    "error": f"Tugas {task_id} harus memiliki workload numerik."
-                }), 400
-            if workload <= 0:
-                return jsonify({"error": f"Workload tugas {task_id} harus > 0."}), 400
-            if task_id in seen_ids:
-                return jsonify({"error": f"ID tugas duplikat: {task_id}"}), 400
-            seen_ids.add(task_id)
-            normalized_tasks.append({"id": task_id, "workload": workload})
+        result = run_experiment(algorithm, tasks)
+        return jsonify(result)
 
-        workers_info = get_workers()
-        online_ids = {w["id"] for w in workers_info if w["online"]}
-        workers = [
-            {"id": w["id"], "host_id": w["host_id"], "capacity": float(w.get("capacity", 1.0))}
-            for w in workers_info if w["online"]
-        ]
-        if not workers:
-            return jsonify({"error": "Tidak ada worker yang online."}), 503
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
 
-        if algorithm == "max-min":
-            assignments = max_min_schedule(normalized_tasks, workers)
-        elif algorithm == "min-min":
-            assignments = min_min_schedule(normalized_tasks, workers)
-        elif algorithm == "fcfs":
-            assignments = fcfs_schedule(normalized_tasks, workers)
-        else:
-            return jsonify({
-                "error": "Algoritma tidak dikenal. Gunakan max-min, min-min, atau fcfs."
-            }), 400
-
-        # Jika worker offline setelah pengecekan awal, beri error sebelum eksekusi.
-        unavailable = sorted({
-            a["worker_id"] for a in assignments if a["worker_id"] not in online_ids
-        })
-        if unavailable:
-            return jsonify({"error": "Worker offline", "workers": unavailable}), 503
-
-        task_lookup = {task["id"]: task for task in normalized_tasks}
-        start = time.perf_counter()
-        results = []
-        failures = []
-
-        # Jalankan antrean setiap worker secara berurutan, sementara worker
-        # yang berbeda dapat bekerja paralel. Urutan assignment mengikuti hasil
-        # penjadwalan Max-Min/Min-Min/FCFS.
-        assignments_by_worker = {w["id"]: [] for w in workers}
-        for assignment in assignments:
-            assignments_by_worker[assignment["worker_id"]].append(assignment)
-
-        def run_worker_queue(worker_assignments):
-            worker_results = []
-            worker_failures = []
-            for assignment in worker_assignments:
-                try:
-                    worker_results.append(
-                        execute_assignment(assignment, task_lookup)
-                    )
-                except Exception as exc:
-                    worker_failures.append({
-                        "task_id": assignment["task_id"],
-                        "worker_id": assignment["worker_id"],
-                        "error": str(exc),
-                    })
-            return worker_results, worker_failures
-
-        with ThreadPoolExecutor(max_workers=len(workers)) as executor:
-            futures = [
-                executor.submit(run_worker_queue, queue)
-                for queue in assignments_by_worker.values()
-                if queue
-            ]
-            for future in as_completed(futures):
-                worker_results, worker_failures = future.result()
-                results.extend(worker_results)
-                failures.extend(worker_failures)
-
-        makespan = time.perf_counter() - start
-        results.sort(key=lambda item: item.get("task_id", ""))
-
-        predicted_makespan = max((a["estimated_finish_seconds"] for a in assignments), default=0.0)
-        gap_percentage = (
-            abs(makespan - predicted_makespan) / predicted_makespan * 100
-            if predicted_makespan > 0 else 0.0
-        )
-
-        worker_busy_times = {w["id"]: 0.0 for w in workers}
-        worker_task_counts = {w["id"]: 0 for w in workers}
-        for res in results:
-            wid = res.get("worker_id")
-            if wid in worker_busy_times:
-                worker_busy_times[wid] += res.get("execution_seconds", 0.0)
-                worker_task_counts[wid] += 1
-
-        total_busy = sum(worker_busy_times.values())
-        worker_count = len(workers)
-        utilization_percent = (
-            (total_busy / (worker_count * makespan)) * 100
-            if (worker_count > 0 and makespan > 0) else 0.0
-        )
-
-        mean_busy = total_busy / worker_count if worker_count > 0 else 0.0
-        variance = (
-            sum((b - mean_busy) ** 2 for b in worker_busy_times.values()) / worker_count
-            if worker_count > 0 else 0.0
-        )
-        degree_of_imbalance = math.sqrt(variance)
-
-        response_body = {
-            "algorithm": algorithm,
-            "task_count": len(normalized_tasks),
-            "worker_count": len(workers),
-            "assignments": assignments,
-            "results": results,
-            "failures": failures,
-            "metrics": {
-                "predicted_makespan_seconds": round(predicted_makespan, 4),
-                "actual_makespan_seconds": round(makespan, 6),
-                "gap_percentage": round(gap_percentage, 2),
-                "throughput_tasks_per_second": round(
-                    len(results) / makespan, 6
-                ) if makespan > 0 else 0,
-                "average_utilization_percent": round(utilization_percent, 2),
-                "degree_of_imbalance": round(degree_of_imbalance, 4),
-                "completed_tasks": len(results),
-                "failed_tasks": len(failures),
-                "worker_stats": {
-                    wid: {
-                        "tasks_assigned": len(assignments_by_worker[wid]),
-                        "tasks_completed": worker_task_counts[wid],
-                        "busy_seconds": round(worker_busy_times[wid], 4),
-                        "utilization_percent": round(
-                            (worker_busy_times[wid] / makespan) * 100, 2
-                        ) if makespan > 0 else 0.0,
-                    }
-                    for wid in sorted(worker_busy_times.keys())
-                },
-            },
-            "note": (
-                "Makespan dan throughput diukur dari eksekusi nyata pada container "
-                "lokal; estimasi scheduler memakai workload dan kapasitas dinamis worker."
-            ),
-        }
-        status_code = 207 if failures else 200
-        return jsonify(response_body), status_code
     finally:
-        scheduler_lock.release()
+        run_lock.release()
 
+
+@app.get("/api/history")
+def api_history():
+    try:
+        with database() as conn:
+            rows = conn.execute("""
+                SELECT id, algorithm, started_at, makespan,
+                       throughput, task_count
+                FROM experiments
+                ORDER BY id DESC
+                LIMIT 30
+            """).fetchall()
+        return jsonify([dict(row) for row in rows])
+    except Exception as e:
+        return jsonify([])
+
+
+@app.get("/api/export")
+def api_export():
+    try:
+        with database() as conn:
+            rows = conn.execute("""
+                SELECT id, algorithm, started_at, finished_at,
+                       makespan, throughput, task_count, results
+                FROM experiments
+                ORDER BY id DESC
+            """).fetchall()
+        return jsonify([dict(row) for row in rows])
+    except Exception as e:
+        return jsonify([])
+
+
+initialize_database()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, threaded=True)
+    app.run(host="0.0.0.0", port=5000)

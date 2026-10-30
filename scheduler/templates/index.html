@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Max-Min Cloud Dashboard</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f1f5f9;
+            color: #172033;
+            font-family: Arial, sans-serif;
+        }
+
+        header {
+            background: #17243a;
+            color: white;
+            padding: 22px 5%;
+        }
+
+        header h2 {
+            margin: 0 0 6px;
+        }
+
+        header p {
+            margin: 0;
+            color: #cbd5e1;
+        }
+
+        main {
+            max-width: 1250px;
+            margin: auto;
+            padding: 25px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 15px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 8px #0000000b;
+            margin-bottom: 18px;
+        }
+
+        .metric {
+            font-size: 30px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .muted {
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        h3 {
+            margin-top: 0;
+        }
+
+        button,
+        select {
+            padding: 11px 15px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+
+        button.primary {
+            background: #2563eb;
+            color: white;
+            border: 0;
+        }
+
+        button:disabled {
+            opacity: .5;
+            cursor: wait;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th,
+        td {
+            padding: 11px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: left;
+        }
+
+        th {
+            background: #f8fafc;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+        }
+
+        .online {
+            color: #15803d;
+            font-weight: bold;
+        }
+
+        .offline {
+            color: #dc2626;
+            font-weight: bold;
+        }
+
+        #message {
+            margin: 12px 0;
+            white-space: pre-wrap;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h2>MAXMIN CLOUD MONITOR</h2>
+        <p>Docker-based Cloud Scheduling & Infrastructure Dashboard</p>
+    </header>
+
+    <main>
+        <h3>Infrastructure Overview</h3>
+        <div class="grid">
+            <div class="card">
+                <div class="muted">Logical Datacenters</div>
+                <div class="metric" id="dc">-</div>
+            </div>
+            <div class="card">
+                <div class="muted">Logical Hosts</div>
+                <div class="metric" id="hosts">-</div>
+            </div>
+            <div class="card">
+                <div class="muted">Logical VMs</div>
+                <div class="metric" id="vms">-</div>
+            </div>
+            <div class="card">
+                <div class="muted">Online Workers</div>
+                <div class="metric" id="workers">-</div>
+            </div>
+        </div>
+
+        <section class="card">
+            <h3>Resource Monitoring</h3>
+            <div class="grid">
+                <div>
+                    <div class="muted">Scheduler CPU Usage</div>
+                    <div class="metric" id="cpu">-</div>
+                </div>
+                <div>
+                    <div class="muted">Scheduler RAM Usage</div>
+                    <div class="metric" id="ram">-</div>
+                </div>
+                <div>
+                    <div class="muted">Host RAM Available to Container</div>
+                    <div class="metric" id="ramtotal">-</div>
+                </div>
+            </div>
+            <p class="muted">
+                Resource metrics above describe the scheduler container's
+                visible environment, not aggregate physical host usage.
+            </p>
+        </section>
+
+        <section class="card">
+            <h3>Host and VM Inventory</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Host</th>
+                            <th>VM</th>
+                            <th>Worker</th>
+                            <th>vCPU</th>
+                            <th>RAM</th>
+                            <th>Storage</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h3>Worker Status</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Worker</th>
+                            <th>Host</th>
+                            <th>VM</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="workerTable"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h3>Task Scheduling</h3>
+            <p class="muted" id="datasetName">Loading dataset...</p>
+
+            <label for="algorithm">Scheduling Algorithm:</label>
+            <select id="algorithm">
+                <option value="maxmin">Max-Min</option>
+                <option value="minmin">Min-Min</option>
+                <option value="fcfs">FCFS</option>
+            </select>
+
+            <button class="primary" id="runButton" onclick="runExperiment()">
+                Run Experiment
+            </button>
+
+            <button onclick="loadDashboard()">Refresh</button>
+
+            <div id="message"></div>
+        </section>
+
+        <section class="card" id="resultSection" hidden>
+            <h3>Experiment Results</h3>
+            <div class="grid">
+                <div>
+                    <div class="muted">Algorithm</div>
+                    <div class="metric" id="resultAlgorithm">-</div>
+                </div>
+                <div>
+                    <div class="muted">Makespan (seconds)</div>
+                    <div class="metric" id="makespan">-</div>
+                </div>
+                <div>
+                    <div class="muted">Throughput (tasks/sec)</div>
+                    <div class="metric" id="throughput">-</div>
+                </div>
+                <div>
+                    <div class="muted">Completed Tasks</div>
+                    <div class="metric" id="completed">-</div>
+                </div>
+            </div>
+
+            <h3>Task Assignments</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task</th>
+                            <th>Workload</th>
+                            <th>Worker</th>
+                            <th>Host</th>
+                            <th>VM</th>
+                            <th>Status</th>
+                            <th>Execution (s)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultTable"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <h3>Experiment History</h3>
+            <button onclick="loadHistory()">Refresh History</button>
+            <button onclick="window.location='/api/export'">Export JSON</button>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Algorithm</th>
+                            <th>Started</th>
+                            <th>Makespan</th>
+                            <th>Throughput</th>
+                            <th>Tasks</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTable"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        async function getJSON(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(await response.text());
+            return response.json();
+        }
+
+        async function loadDashboard() {
+            try {
+                const data = await getJSON('/api/status');
+
+                document.getElementById('dc').textContent =
+                    data.datacenter_count;
+                document.getElementById('hosts').textContent =
+                    data.host_count;
+                document.getElementById('vms').textContent =
+                    data.vm_count;
+
+                const online = data.workers.filter(
+                    w => w.status === 'online'
+                ).length;
+
+                document.getElementById('workers').textContent =
+                    `${online}/${data.workers.length}`;
+
+                document.getElementById('cpu').textContent =
+                    data.scheduler_resources.cpu_percent + '%';
+                document.getElementById('ram').textContent =
+                    data.scheduler_resources.ram_percent + '%';
+                document.getElementById('ramtotal').textContent =
+                    data.scheduler_resources.ram_total_gb + ' GB';
+
+                const inventoryRows = [];
+
+                data.inventory.datacenters.forEach(dc => {
+                    dc.hosts.forEach(host => {
+                        host.vms.forEach(vm => {
+                            inventoryRows.push(`
+                        <tr>
+                            <td>${host.id}</td>
+                            <td>${vm.id}</td>
+                            <td>${vm.worker_id}</td>
+                            <td>${vm.vcpus}</td>
+                            <td>${vm.ram_mb} MB</td>
+                            <td>${vm.storage_gb} GB</td>
+                        </tr>
+                    `);
+                        });
+                    });
+                });
+
+                document.getElementById('inventory').innerHTML =
+                    inventoryRows.join('');
+
+                document.getElementById('workerTable').innerHTML =
+                    data.workers.map(w => `
+                <tr>
+                    <td>${w.id}</td>
+                    <td>${w.host}</td>
+                    <td>${w.vm}</td>
+                    <td class="${w.status}">
+                        ${w.status.toUpperCase()}
+                    </td>
+                </tr>
+            `).join('');
+
+            } catch (error) {
+                document.getElementById('message').textContent =
+                    'Dashboard error: ' + error.message;
+            }
+        }
+
+        async function loadDataset() {
+            const data = await getJSON('/api/dataset');
+            document.getElementById('datasetName').textContent =
+                `${data.dataset_name} — ${data.tasks.length} tasks`;
+        }
+
+        async function runExperiment() {
+            const button = document.getElementById('runButton');
+            const message = document.getElementById('message');
+
+            button.disabled = true;
+            message.textContent = 'Experiment is running...';
+
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        algorithm: document.getElementById('algorithm').value
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Experiment failed');
+                }
+
+                document.getElementById('resultSection').hidden = false;
+
+                document.getElementById('resultAlgorithm').textContent =
+                    data.algorithm;
+                document.getElementById('makespan').textContent =
+                    data.makespan;
+                document.getElementById('throughput').textContent =
+                    data.throughput;
+                document.getElementById('completed').textContent =
+                    `${data.completed}/${data.task_count}`;
+
+                document.getElementById('resultTable').innerHTML =
+                    data.results.map(r => `
+                <tr>
+                    <td>${r.task_id}</td>
+                    <td>${r.workload ?? '-'}</td>
+                    <td>${r.worker_id}</td>
+                    <td>${r.host_id}</td>
+                    <td>${r.vm_id}</td>
+                    <td>${r.status}</td>
+                    <td>${r.execution_seconds ?? '-'}</td>
+                </tr>
+            `).join('');
+
+                message.textContent =
+                    `Experiment completed. Failed tasks: ${data.failed}`;
+
+                await loadHistory();
+                await loadDashboard();
+
+            } catch (error) {
+                message.textContent = 'Error: ' + error.message;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function loadHistory() {
+            const data = await getJSON('/api/history');
+
+            document.getElementById('historyTable').innerHTML =
+                data.map(item => `
+            <tr>
+                <td>${item.id}</td>
+                <td>${item.algorithm}</td>
+                <td>${item.started_at}</td>
+                <td>${item.makespan}</td>
+                <td>${item.throughput}</td>
+                <td>${item.task_count}</td>
+            </tr>
+        `).join('');
+        }
+
+        async function initialize() {
+            await loadDashboard();
+            await loadDataset();
+            await loadHistory();
+        }
+
+        initialize();
+        setInterval(loadDashboard, 10000);
+    </script>
+
+</body>
+
+</html>

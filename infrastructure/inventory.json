@@ -1,0 +1,61 @@
+{
+    "datacenters": [
+        {
+            "id": "DC-01",
+            "name": "Local Docker Cloud",
+            "location": "Local Windows 10/11",
+            "hosts": [
+                {
+                    "id": "HOST-01",
+                    "name": "Logical Host 01",
+                    "cpu_cores": 2,
+                    "ram_gb": 4,
+                    "storage_gb": 32,
+                    "vms": [
+                        {
+                            "id": "VM-01",
+                            "name": "Worker VM 01",
+                            "worker_id": "WORKER-01",
+                            "vcpus": 1,
+                            "ram_mb": 512,
+                            "storage_gb": 2
+                        },
+                        {
+                            "id": "VM-02",
+                            "name": "Worker VM 02",
+                            "worker_id": "WORKER-02",
+                            "vcpus": 1,
+                            "ram_mb": 512,
+                            "storage_gb": 2
+                        }
+                    ]
+                },
+                {
+                    "id": "HOST-02",
+                    "name": "Logical Host 02",
+                    "cpu_cores": 2,
+                    "ram_gb": 4,
+                    "storage_gb": 32,
+                    "vms": [
+                        {
+                            "id": "VM-03",
+                            "name": "Worker VM 03",
+                            "worker_id": "WORKER-03",
+                            "vcpus": 1,
+                            "ram_mb": 512,
+                            "storage_gb": 2
+                        },
+                        {
+                            "id": "VM-04",
+                            "name": "Worker VM 04",
+                            "worker_id": "WORKER-04",
+                            "vcpus": 1,
+                            "ram_mb": 512,
+                            "storage_gb": 2
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

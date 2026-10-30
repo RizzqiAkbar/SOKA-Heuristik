@@ -1,0 +1,85 @@
+{
+    "dataset_name": "Max-Min Scheduling Benchmark",
+    "tasks": [
+        {
+            "id": "T1",
+            "workload": 4
+        },
+        {
+            "id": "T2",
+            "workload": 8
+        },
+        {
+            "id": "T3",
+            "workload": 3
+        },
+        {
+            "id": "T4",
+            "workload": 9
+        },
+        {
+            "id": "T5",
+            "workload": 5
+        },
+        {
+            "id": "T6",
+            "workload": 7
+        },
+        {
+            "id": "T7",
+            "workload": 2
+        },
+        {
+            "id": "T8",
+            "workload": 10
+        },
+        {
+            "id": "T9",
+            "workload": 6
+        },
+        {
+            "id": "T10",
+            "workload": 4
+        },
+        {
+            "id": "T11",
+            "workload": 8
+        },
+        {
+            "id": "T12",
+            "workload": 3
+        },
+        {
+            "id": "T13",
+            "workload": 7
+        },
+        {
+            "id": "T14",
+            "workload": 5
+        },
+        {
+            "id": "T15",
+            "workload": 9
+        },
+        {
+            "id": "T16",
+            "workload": 2
+        },
+        {
+            "id": "T17",
+            "workload": 6
+        },
+        {
+            "id": "T18",
+            "workload": 10
+        },
+        {
+            "id": "T19",
+            "workload": 4
+        },
+        {
+            "id": "T20",
+            "workload": 7
+        }
+    ]
+}

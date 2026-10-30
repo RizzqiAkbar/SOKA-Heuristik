@@ -116,7 +116,8 @@ def main():
     for ds_path in datasets_to_run:
         ds_name = os.path.basename(ds_path)
         with open(ds_path, "r", encoding="utf-8") as f:
-            tasks = json.load(f)
+            raw_data = json.load(f)
+            tasks = raw_data.get("tasks", raw_data) if isinstance(raw_data, dict) else raw_data
 
         for algo in algos:
             # Beri jeda 1 detik antar run untuk pembersihan worker

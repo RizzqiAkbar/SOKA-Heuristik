@@ -4,8 +4,15 @@ services:
     container_name: maxmin_scheduler
     ports:
       - "5000:5000"
+    volumes:
+      - ./infrastructure:/app/infrastructure:ro
+      - ./datasets:/app/dataset:ro
+      - scheduler-data:/app/data
     environment:
-      WORKERS: "worker1,worker2,worker3,worker4"
+      DATABASE_PATH: "/app/data/experiments.db"
+      INVENTORY_PATH: "/app/infrastructure/inventory.json"
+      DATASET_PATH: "/app/dataset/tasks.json"
+      WORKERS: '[{"id":"WORKER-01","url":"http://worker1:8000","capacity":1.0,"host":"HOST-01","vm":"VM-01"},{"id":"WORKER-02","url":"http://worker2:8000","capacity":1.5,"host":"HOST-01","vm":"VM-02"},{"id":"WORKER-03","url":"http://worker3:8000","capacity":0.8,"host":"HOST-02","vm":"VM-03"},{"id":"WORKER-04","url":"http://worker4:8000","capacity":1.2,"host":"HOST-02","vm":"VM-04"}]'
     depends_on:
       worker1:
         condition: service_healthy
@@ -22,10 +29,10 @@ services:
     build: ./worker
     container_name: maxmin_worker1
     environment:
-      WORKER_ID: worker1
-      HOST_ID: host1
-      CAPACITY: 1.0
-      ITERATIONS_PER_UNIT: 80000
+      WORKER_ID: WORKER-01
+      HOST_ID: HOST-01
+      CAPACITY: "1.0"
+      ITERATIONS_PER_UNIT: "80000"
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -37,10 +44,10 @@ services:
     build: ./worker
     container_name: maxmin_worker2
     environment:
-      WORKER_ID: worker2
-      HOST_ID: host1
-      CAPACITY: 1.5
-      ITERATIONS_PER_UNIT: 80000
+      WORKER_ID: WORKER-02
+      HOST_ID: HOST-01
+      CAPACITY: "1.5"
+      ITERATIONS_PER_UNIT: "80000"
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -52,10 +59,10 @@ services:
     build: ./worker
     container_name: maxmin_worker3
     environment:
-      WORKER_ID: worker3
-      HOST_ID: host2
-      CAPACITY: 0.8
-      ITERATIONS_PER_UNIT: 80000
+      WORKER_ID: WORKER-03
+      HOST_ID: HOST-02
+      CAPACITY: "0.8"
+      ITERATIONS_PER_UNIT: "80000"
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
@@ -67,16 +74,19 @@ services:
     build: ./worker
     container_name: maxmin_worker4
     environment:
-      WORKER_ID: worker4
-      HOST_ID: host2
-      CAPACITY: 1.2
-      ITERATIONS_PER_UNIT: 80000
+      WORKER_ID: WORKER-04
+      HOST_ID: HOST-02
+      CAPACITY: "1.2"
+      ITERATIONS_PER_UNIT: "80000"
     networks: [maxmin-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+volumes:
+  scheduler-data:
 
 networks:
   maxmin-net:
