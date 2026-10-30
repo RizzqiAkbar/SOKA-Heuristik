@@ -219,21 +219,29 @@
 
         <section class="card">
             <h3>Task Scheduling</h3>
+            <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin-bottom: 12px;">
+                <div>
+                    <label for="datasetSelect">Dataset:</label>
+                    <select id="datasetSelect" onchange="onDatasetChange()">
+                        <option value="">Loading datasets...</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="algorithm">Scheduling Algorithm:</label>
+                    <select id="algorithm">
+                        <option value="maxmin">Max-Min</option>
+                        <option value="minmin">Min-Min</option>
+                        <option value="fcfs">FCFS</option>
+                    </select>
+                </div>
+                <div style="margin-top: 18px;">
+                    <button class="primary" id="runButton" onclick="runExperiment()">
+                        Run Experiment
+                    </button>
+                    <button onclick="loadDashboard()">Refresh</button>
+                </div>
+            </div>
             <p class="muted" id="datasetName">Loading dataset...</p>
-
-            <label for="algorithm">Scheduling Algorithm:</label>
-            <select id="algorithm">
-                <option value="maxmin">Max-Min</option>
-                <option value="minmin">Min-Min</option>
-                <option value="fcfs">FCFS</option>
-            </select>
-
-            <button class="primary" id="runButton" onclick="runExperiment()">
-                Run Experiment
-            </button>
-
-            <button onclick="loadDashboard()">Refresh</button>
-
             <div id="message"></div>
         </section>
 
@@ -371,15 +379,37 @@
             }
         }
 
-        async function loadDataset() {
-            const data = await getJSON('/api/dataset');
+        async function loadDatasetList() {
+            try {
+                const files = await getJSON('/api/datasets');
+                const sel = document.getElementById('datasetSelect');
+                if (files && files.length > 0) {
+                    sel.innerHTML = files.map(f => `<option value="${f}">${f}</option>`).join('');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function loadDataset(file) {
+            const url = file ? `/api/dataset?file=${encodeURIComponent(file)}` : '/api/dataset';
+            const data = await getJSON(url);
+            const count = data.tasks ? data.tasks.length : (Array.isArray(data) ? data.length : 0);
+            const name = data.dataset_name || (data.filename || file || 'Tasks');
             document.getElementById('datasetName').textContent =
-                `${data.dataset_name} — ${data.tasks.length} tasks`;
+                `${name} — ${count} tasks`;
+        }
+
+        function onDatasetChange() {
+            const sel = document.getElementById('datasetSelect');
+            loadDataset(sel.value);
         }
 
         async function runExperiment() {
             const button = document.getElementById('runButton');
             const message = document.getElementById('message');
+            const datasetSelect = document.getElementById('datasetSelect');
+            const selectedDataset = datasetSelect ? datasetSelect.value : null;
 
             button.disabled = true;
             message.textContent = 'Experiment is running...';
@@ -389,7 +419,8 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        algorithm: document.getElementById('algorithm').value
+                        algorithm: document.getElementById('algorithm').value,
+                        dataset_file: selectedDataset
                     })
                 });
 
@@ -454,7 +485,9 @@
 
         async function initialize() {
             await loadDashboard();
-            await loadDataset();
+            await loadDatasetList();
+            const sel = document.getElementById('datasetSelect');
+            await loadDataset(sel ? sel.value : null);
             await loadHistory();
         }
 

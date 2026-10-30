@@ -35,10 +35,14 @@ curl http://localhost:5000/workers
 
 ## 📊 Dataset Pengujian
 
-Folder `datasets/` menyediakan 3 skenario dataset task heterogen:
-- [`datasets/dataset_10.json`](./datasets/dataset_10.json): 10 task (pengujian cepat/debug).
-- [`datasets/dataset_30.json`](./datasets/dataset_30.json): 30 task (skenario menengah).
-- [`datasets/dataset_60.json`](./datasets/dataset_60.json): 60 task (skenario komprehensif).
+Folder `datasets/` menyediakan skenario dataset task heterogen:
+1. **Dataset Standar**:
+   - [`datasets/dataset_10.json`](./datasets/dataset_10.json): 10 task (pengujian cepat/debug).
+   - [`datasets/dataset_30.json`](./datasets/dataset_30.json): 30 task (skenario menengah).
+   - [`datasets/dataset_60.json`](./datasets/dataset_60.json): 60 task (skenario komprehensif).
+2. **Dataset GoCJ (Google Cloud Jobs)** (100 – 1000 Tasks):
+   - [`datasets/GoCJ_Dataset_100.json`](./datasets/GoCJ_Dataset_100.json) s.d. [`datasets/GoCJ_Dataset_1000.json`](./datasets/GoCJ_Dataset_1000.json) (interval 50 task: 100, 150, 200, ..., 1000).
+   - Dikonversi dari file asli `GoCJ_Dataset_<N>.txt` menggunakan script [`convert_gocj.py`](./convert_gocj.py). Workload dinormalisasi ke integer 1–100 sesuai skala komputasi riil.
 
 Setiap task memiliki atribut `id` dan `workload` (1–100).
 
@@ -49,11 +53,22 @@ Setiap task memiliki atribut `id` dan `workload` (1–100).
 Tersedia script Python `benchmark.py` untuk menguji dataset dan membandingkan ketiga algoritma secara langsung:
 
 ```bash
-# Jalankan semua dataset terhadap Max-Min, Min-Min, dan FCFS
+# Jalankan dataset standar cepat (10, 30, 60):
 python benchmark.py
 
-# Atau jalankan dataset tertentu saja:
-python benchmark.py --dataset datasets/dataset_10.json
+# Jalankan dataset GoCJ tertentu (misal: 100 task, 500 task, 1000 task):
+python benchmark.py -d 100
+python benchmark.py -d 500
+python benchmark.py -d 1000
+
+# Jalankan seluruh dataset GoCJ (100-1000):
+python benchmark.py --gocj
+
+# Jalankan dataset GoCJ bertahap (misal interval 200 task):
+python benchmark.py --gocj-step 200
+
+# Jalankan algoritma tertentu saja (contoh: max-min):
+python benchmark.py -d 100 -a max-min
 ```
 
 Hasil eksekusi akan ditampilkan berupa tabel di terminal dan otomatis diekspor ke file CSV **`hasil_benchmark.csv`** dengan metrik:

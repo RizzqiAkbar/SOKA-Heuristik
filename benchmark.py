@@ -58,7 +58,10 @@ def run_experiment(algorithm, tasks):
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Penjadwalan Heuristik Real-Life")
-    parser.add_argument("--dataset", "-d", help="Path ke file dataset JSON tertentu")
+    parser.add_argument("--dataset", "-d", help="Path atau nama dataset JSON (contoh: 100, GoCJ_Dataset_100, dataset_10.json)")
+    parser.add_argument("--gocj", action="store_true", help="Jalankan semua dataset GoCJ (100 - 1000)")
+    parser.add_argument("--gocj-step", type=int, default=0, help="Langkah kelipatan GoCJ (contoh: --gocj-step 200)")
+    parser.add_argument("--all", action="store_true", help="Jalankan seluruh file dataset yang ada")
     parser.add_argument("--algorithm", "-a", choices=["all", "max-min", "min-min", "fcfs"], default="all")
     parser.add_argument("--output", "-o", default=DEFAULT_CSV, help="File output CSV")
     args = parser.parse_args()
@@ -84,17 +87,57 @@ def main():
     # Tentukan dataset yang akan diuji
     datasets_to_run = []
     if args.dataset:
-        if os.path.isfile(args.dataset):
-            datasets_to_run.append(args.dataset)
+        candidate = args.dataset
+        candidates = [
+            candidate,
+            os.path.join(DATASETS_DIR, candidate),
+            os.path.join(DATASETS_DIR, f"{candidate}.json"),
+            os.path.join(DATASETS_DIR, f"GoCJ_Dataset_{candidate}.json"),
+            os.path.join(DATASETS_DIR, f"dataset_{candidate}.json"),
+        ]
+        found = None
+        for c in candidates:
+            if os.path.isfile(c):
+                found = c
+                break
+        if found:
+            datasets_to_run.append(found)
         else:
-            print(f"[ERROR] File dataset {args.dataset} tidak ditemukan.")
+            print(f"[ERROR] File dataset '{args.dataset}' tidak ditemukan.")
             sys.exit(1)
-    else:
-        # Default: semua file di folder datasets/
+    elif args.gocj or args.gocj_step > 0:
+        gocj_files = []
+        if os.path.isdir(DATASETS_DIR):
+            import re
+            for file in os.listdir(DATASETS_DIR):
+                m = re.match(r"GoCJ_Dataset_(\d+)\.json", file)
+                if m:
+                    gocj_files.append((int(m.group(1)), os.path.join(DATASETS_DIR, file)))
+            gocj_files.sort(key=lambda x: x[0])
+            if args.gocj_step > 0:
+                selected = [f for n, f in gocj_files if (n - 100) % args.gocj_step == 0 or n == 1000]
+                datasets_to_run.extend(selected)
+            else:
+                datasets_to_run.extend([f for _, f in gocj_files])
+    elif args.all:
         if os.path.isdir(DATASETS_DIR):
             for file in sorted(os.listdir(DATASETS_DIR)):
                 if file.endswith(".json"):
                     datasets_to_run.append(os.path.join(DATASETS_DIR, file))
+    else:
+        # Default: dataset standar (10, 30, 60)
+        if os.path.isdir(DATASETS_DIR):
+            for file in ["dataset_10.json", "dataset_30.json", "dataset_60.json"]:
+                p = os.path.join(DATASETS_DIR, file)
+                if os.path.isfile(p):
+                    datasets_to_run.append(p)
+        print("\n[INFO] Menjalankan dataset standar cepat (10, 30, 60).")
+        print("[INFO] Untuk menguji dataset GoCJ (100 - 1000):")
+        print("       python benchmark.py -d 100                     (uji 100 task)")
+        print("       python benchmark.py -d 500                     (uji 500 task)")
+        print("       python benchmark.py -d 1000                    (uji 1000 task)")
+        print("       python benchmark.py --gocj                     (uji seluruh GoCJ 100-1000)")
+        print("       python benchmark.py --gocj-step 200            (uji GoCJ bertahap)")
 
     if not datasets_to_run:
         print("[ERROR] Tidak ada dataset JSON yang ditemukan.")
@@ -109,9 +152,9 @@ def main():
         "Utilization_Persen", "Imbalance"
     ]
 
-    print("\n" + "-" * 112)
-    print(f"{'Dataset':<15} | {'Algoritma':<9} | {'Tasks':<5} | {'Prediksi (s)':<12} | {'Aktual (s)':<12} | {'Gap (%)':<8} | {'Throughput':<10} | {'Util (%)':<9} | {'Imbalance':<10}")
-    print("-" * 112)
+    print("\n" + "-" * 118)
+    print(f"{'Dataset':<22} | {'Algoritma':<9} | {'Tasks':<5} | {'Prediksi (s)':<12} | {'Aktual (s)':<12} | {'Gap (%)':<8} | {'Throughput':<10} | {'Util (%)':<9} | {'Imbalance':<10}")
+    print("-" * 118)
 
     for ds_path in datasets_to_run:
         ds_name = os.path.basename(ds_path)
@@ -134,7 +177,7 @@ def main():
                 util = metrics.get("average_utilization_percent", 0.0)
                 imbalance = metrics.get("degree_of_imbalance", 0.0)
 
-                print(f"{ds_name:<15} | {algo.upper():<9} | {n_task:<5} | {pred_ms:<12.4f} | {act_ms:<12.4f} | {gap:<8.2f} | {throughput:<10.4f} | {util:<9.2f} | {imbalance:<10.4f}")
+                print(f"{ds_name:<22} | {algo.upper():<9} | {n_task:<5} | {pred_ms:<12.4f} | {act_ms:<12.4f} | {gap:<8.2f} | {throughput:<10.4f} | {util:<9.2f} | {imbalance:<10.4f}")
 
                 csv_rows.append({
                     "Dataset": ds_name,

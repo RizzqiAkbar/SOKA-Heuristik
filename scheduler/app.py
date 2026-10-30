@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import math
@@ -71,13 +72,31 @@ def load_inventory():
     return {"datacenters": []}
 
 
-def load_dataset():
+def load_dataset(filename=None):
+    if filename:
+        candidate_paths = [
+            os.path.join(os.path.dirname(DATASET), filename),
+            os.path.join("datasets", filename),
+            os.path.join("../datasets", filename),
+            filename,
+        ]
+        for p in candidate_paths:
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as file:
+                    data = json.load(file)
+                    tasks = data.get("tasks", data) if isinstance(data, dict) else data
+                    name = data.get("dataset_name", filename) if isinstance(data, dict) else filename
+                    return {"dataset_name": name, "tasks": tasks, "filename": filename}
+
     paths = [DATASET, "datasets/tasks.json", "../datasets/tasks.json"]
     for p in paths:
         if os.path.exists(p):
             with open(p, encoding="utf-8") as file:
-                return json.load(file)
-    return {"dataset_name": "Default Tasks", "tasks": []}
+                data = json.load(file)
+                tasks = data.get("tasks", data) if isinstance(data, dict) else data
+                name = data.get("dataset_name", os.path.basename(p)) if isinstance(data, dict) else os.path.basename(p)
+                return {"dataset_name": name, "tasks": tasks, "filename": os.path.basename(p)}
+    return {"dataset_name": "Default Tasks", "tasks": [], "filename": "none"}
 
 
 def worker_status():
@@ -383,9 +402,27 @@ def api_status():
     })
 
 
+@app.get("/api/datasets")
+def api_datasets_list():
+    dirs = [os.path.dirname(DATASET), "datasets", "../datasets"]
+    found = []
+    for d in dirs:
+        if os.path.isdir(d):
+            files = [f for f in os.listdir(d) if f.endswith(".json")]
+            if files:
+                def sort_key(name):
+                    m = re.search(r"(\d+)", name)
+                    num = int(m.group(1)) if m else 99999
+                    return (0 if "dataset_" in name else (1 if "GoCJ" in name else 2), num, name)
+                found = sorted(files, key=sort_key)
+                break
+    return jsonify(found)
+
+
 @app.get("/api/dataset")
 def api_dataset():
-    return jsonify(load_dataset())
+    file_param = request.args.get("file")
+    return jsonify(load_dataset(file_param))
 
 
 @app.post("/api/run")
@@ -396,11 +433,12 @@ def api_run():
     try:
         data = request.get_json(silent=True) or {}
         algorithm = data.get("algorithm", "maxmin")
+        dataset_file = data.get("dataset_file")
 
         # Use tasks provided or fallback to dataset
         tasks = data.get("tasks")
         if not tasks:
-            dataset = load_dataset()
+            dataset = load_dataset(dataset_file)
             tasks = dataset.get("tasks", [])
 
         if not tasks:
