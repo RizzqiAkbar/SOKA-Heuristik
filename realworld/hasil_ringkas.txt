@@ -1,0 +1,48 @@
+##### 100 task #####
+=== HASIL DUNIA NYATA (Max-Min, 100 task) ===
+Prediksi makespan : 300.0 detik
+Makespan aktual   : 461.0 detik (selisih 53.7%)
+Throughput        : 0.217 task/detik
+
+Node        vCPU   Task   Util(%)
+vm-a1          2     32      95.6
+vm-a2          1     16      96.7
+vm-b1          2     33      60.5
+vm-b2          1     19      68.5
+
+##### 200 task #####
+=== HASIL DUNIA NYATA (Max-Min, 200 task) ===
+Prediksi makespan : 600.0 detik
+Makespan aktual   : 836.0 detik (selisih 39.3%)
+Throughput        : 0.239 task/detik
+
+Node        vCPU   Task   Util(%)
+vm-a1          2     63      95.9
+vm-a2          1     34      95.7
+vm-b1          2     67      64.1
+vm-b2          1     36      70.5
+
+##### 300 task #####
+=== HASIL DUNIA NYATA (Max-Min, 300 task) ===
+Prediksi makespan : 900.0 detik
+Makespan aktual   : 1210.0 detik (selisih 34.4%)
+Throughput        : 0.248 task/detik
+
+Node        vCPU   Task   Util(%)
+vm-a1          2     95      93.3
+vm-a2          1     52      94.8
+vm-b1          2     98      66.0
+vm-b2          1     55      72.4
+
+##### 500 task #####
+=== HASIL DUNIA NYATA (Max-Min, 500 task) ===
+Prediksi makespan : 1500.0 detik
+Makespan aktual   : 2024.0 detik (selisih 34.9%)
+Throughput        : 0.247 task/detik
+
+Node        vCPU   Task   Util(%)
+vm-a1          2    159      92.7
+vm-a2          1     86      95.0
+vm-b1          2    165      63.1
+vm-b2          1     90      70.5
+

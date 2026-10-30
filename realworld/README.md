@@ -157,6 +157,29 @@ biaya tetap per task (membuat Job, menjadwalkan pod, memulai container) sebagai 
 memodelkan biaya itu. Penyebab lain yang mungkin, belum diukur terpisah: k3s server memakai CPU di vm-a1, dan dua VM
 berbagi CPU PC yang sama.
 
+## Hasil batch 100-500 task (target = 3 x jumlah task)
+
+Dijalankan berurutan dengan `run_batch.sh` (dimulai lewat `start_batch.sh`) menggunakan `batch_100.csv`,
+`batch_200.csv`, `batch_300.csv`, `batch_500.csv`. Keluaran lengkap ada di `hasil_ringkas.txt`.
+
+| Task | Prediksi | Aktual | Selisih | Throughput (task/detik) |
+|---|---|---|---|---|
+| 100 | 300 detik | 461 detik | 53,7% | 0,217 |
+| 200 | 600 detik | 836 detik | 39,3% | 0,239 |
+| 300 | 900 detik | 1210 detik | 34,4% | 0,248 |
+| 500 | 1500 detik | 2024 detik | 34,9% | 0,247 |
+
+Pembagian task ke node proporsional terhadap vCPU di semua ukuran (contoh 500 task: vm-a1 159, vm-a2 86,
+vm-b1 165, vm-b2 90). Selisih menurun dari 53,7% lalu mendatar sekitar 34-35% mulai 300 task, dan throughput
+mendatar sekitar 0,247 task/detik.
+
+Utilisasi node tidak merata pada semua empat run: vm-a1 dan vm-a2 (PC 1) 93-97%, sedangkan vm-b1 dan vm-b2
+(PC 2) 60-72%. Terukur: `tailscale status` menunjukkan vm-b1 dan vm-b2 terhubung ke PC 1 lewat relay Tailscale
+(`relay "sin"`), sedangkan vm-a2 terhubung langsung. Dugaan (belum diuji terpisah): k3s server berada di PC 1,
+sehingga laporan status task dari PC 2 tertunda oleh relay, dan task berikutnya baru dibuat setelah
+penyelesaian task sebelumnya terdeteksi, sehingga node PC 2 punya jeda kosong antar task. Beban k3s server dan
+`run_plan.py` di vm-a1 juga dapat memperlambat PC 1.
+
 ## Setelah PC dimatikan atau di-restart
 
 VM tidak menyala otomatis. Di tiap PC (PowerShell):
