@@ -71,7 +71,7 @@ public class Main {
     private static final Map<Host, Datacenter> hostDatacenter = new IdentityHashMap<>();
     private static final Map<Datacenter, String> dcLabel = new IdentityHashMap<>();
 
-    private static class ScheduleResult {
+    static class ScheduleResult {
         final Map<Cloudlet, Vm> assignment;
         final List<Cloudlet> order;
         final double predictedMakespan;
@@ -210,7 +210,7 @@ public class Main {
         return vmList;
     }
 
-    private static List<Cloudlet> loadGoCJDataset(int n) {
+    static List<Cloudlet> loadGoCJDataset(int n) {
         String path = "/dataset/GoCJ_Dataset_" + n + ".txt";
         List<Long> lengths = new ArrayList<>();
         try (InputStream is = Main.class.getResourceAsStream(path)) {
@@ -244,7 +244,7 @@ public class Main {
         return best;
     }
 
-    private static ScheduleResult maxMinSchedule(List<Cloudlet> cloudlets, List<Vm> vms) {
+    static ScheduleResult maxMinSchedule(List<Cloudlet> cloudlets, List<Vm> vms) {
         return minMaxGeneric(cloudlets, vms, true);
     }
 
