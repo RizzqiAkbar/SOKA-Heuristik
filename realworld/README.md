@@ -148,7 +148,7 @@ Jalankan satu kali pemanasan lebih dulu agar image ter-cache di semua node (plan
 
 | Plan | Prediksi | Aktual | Selisih |
 |---|---|---|---|
-| Pemanasan (task rata-rata sekitar 3 detik) | 60,0 detik | 162,0 detik | 170,0% |
+| Pemanasan (task rata-rata sekitar 3,6 detik) | 60,0 detik | 162,0 detik | 170,0% |
 | `plan_600.csv` | 600,0 detik | 754,0 detik | 25,7% |
 
 Pembagian task pada `plan_600.csv`: vm-a1 32, vm-a2 16, vm-b1 33, vm-b2 19 (node 2 vCPU mendapat sekitar dua kali
@@ -157,28 +157,73 @@ biaya tetap per task (membuat Job, menjadwalkan pod, memulai container) sebagai 
 memodelkan biaya itu. Penyebab lain yang mungkin, belum diukur terpisah: k3s server memakai CPU di vm-a1, dan dua VM
 berbagi CPU PC yang sama.
 
-## Hasil batch 100-500 task (target = 3 x jumlah task)
+## Hasil batch 100-1000 task (target = 3 x jumlah task)
 
-Dijalankan berurutan dengan `run_batch.sh` (dimulai lewat `start_batch.sh`) menggunakan `batch_100.csv`,
-`batch_200.csv`, `batch_300.csv`, `batch_500.csv`. Keluaran lengkap ada di `hasil_ringkas.txt`.
+Batch pertama (100, 200, 300, 500 task) dijalankan dengan `run_batch.sh` (dimulai lewat `start_batch.sh`);
+keluarannya di `hasil_ringkas.txt`. Batch kedua (400, 600, 700, 800, 900, 1000 task) dijalankan dengan
+`run_batch2.sh` (dimulai lewat `start_batch2.sh`); keluarannya di `hasil_ringkas_2.txt`. Plan-nya `batch_<N>.csv`.
+Semua run berstatus `kode 0` (selesai, tidak kena batas waktu). Satu run per ukuran.
 
 | Task | Prediksi | Aktual | Selisih | Throughput (task/detik) |
 |---|---|---|---|---|
 | 100 | 300 detik | 461 detik | 53,7% | 0,217 |
 | 200 | 600 detik | 836 detik | 39,3% | 0,239 |
 | 300 | 900 detik | 1210 detik | 34,4% | 0,248 |
+| 400 | 1200 detik | 1704 detik | 42,0% | 0,235 |
 | 500 | 1500 detik | 2024 detik | 34,9% | 0,247 |
+| 600 | 1800 detik | 2628 detik | 46,0% | 0,228 |
+| 700 | 2100 detik | 2792 detik | 33,0% | 0,251 |
+| 800 | 2400 detik | 3405 detik | 41,9% | 0,235 |
+| 900 | 2700 detik | 3808 detik | 41,0% | 0,236 |
+| 1000 | 3000 detik | 5072 detik | 69,1% | 0,197 |
 
-Pembagian task ke node proporsional terhadap vCPU di semua ukuran (contoh 500 task: vm-a1 159, vm-a2 86,
-vm-b1 165, vm-b2 90). Selisih menurun dari 53,7% lalu mendatar sekitar 34-35% mulai 300 task, dan throughput
-mendatar sekitar 0,247 task/detik.
+Utilisasi dan jumlah task per node:
 
-Utilisasi node tidak merata pada semua empat run: vm-a1 dan vm-a2 (PC 1) 93-97%, sedangkan vm-b1 dan vm-b2
-(PC 2) 60-72%. Terukur: `tailscale status` menunjukkan vm-b1 dan vm-b2 terhubung ke PC 1 lewat relay Tailscale
-(`relay "sin"`), sedangkan vm-a2 terhubung langsung. Dugaan (belum diuji terpisah): k3s server berada di PC 1,
-sehingga laporan status task dari PC 2 tertunda oleh relay, dan task berikutnya baru dibuat setelah
+| Task | vm-a1 (2 vCPU) | vm-a2 (1 vCPU) | vm-b1 (2 vCPU) | vm-b2 (1 vCPU) |
+|---|---|---|---|---|
+| 400 | 126 task, 95,0% | 69 task, 94,3% | 132 task, 56,9% | 73 task, 63,8% |
+| 600 | 188 task, 94,5% | 105 task, 94,0% | 198 task, 55,4% | 109 task, 61,3% |
+| 700 | 219 task, 93,6% | 121 task, 93,2% | 233 task, 61,6% | 127 task, 68,9% |
+| 800 | 253 task, 94,4% | 139 task, 92,7% | 262 task, 57,0% | 146 task, 63,2% |
+| 900 | 284 task, 93,6% | 156 task, 92,9% | 296 task, 57,3% | 164 task, 64,2% |
+| 1000 | 314 task, 93,5% | 173 task, 89,6% | 330 task, 47,7% | 183 task, 53,0% |
+
+(Baris 100, 200, 300, 500 task ada di `hasil_ringkas.txt`.)
+
+Yang terukur:
+- Pembagian task ke node proporsional terhadap vCPU di semua ukuran (node 2 vCPU mendapat sekitar dua kali node
+  1 vCPU).
+- Selisih aktual terhadap prediksi 33-54% untuk 100-900 task. Tidak ada tren naik atau turun yang jelas setelah
+  200 task; naik-turunnya (misalnya 33,0% pada 700 dan 46,0% pada 600) kemungkinan variasi antar-run, karena tiap
+  ukuran hanya satu run dan plan pemanasan yang sama pernah menghasilkan 162, 153, dan 126 detik.
+- Throughput sekitar 0,23-0,25 task/detik untuk 300-900 task.
+- 1000 task paling lambat: selisih 69,1%, throughput 0,197 task/detik, dan utilisasi semua node turun (vm-a2 89,6%;
+  vm-b1 47,7%; vm-b2 53,0%). Penyebabnya belum diukur. Dugaan: `run_plan.py` menyimpan 1000 Job dan meminta daftar
+  Job tiap detik di vm-a1 (2 vCPU, 2 GB, yang juga menjadi k3s server), sehingga pengendali itu sendiri melambat.
+
+Utilisasi tidak merata antar-PC pada semua ukuran: vm-a1 dan vm-a2 (PC 1) 93-97% untuk 100-900 task, sedangkan
+vm-b1 dan vm-b2 (PC 2) 55-72%. Terukur: `tailscale status` menunjukkan vm-b1 dan vm-b2 terhubung ke PC 1 lewat relay
+Tailscale (`relay "sin"`), sedangkan vm-a2 terhubung langsung. Dugaan (belum diuji terpisah): k3s server berada di
+PC 1, sehingga laporan status task dari PC 2 tertunda oleh relay, dan task berikutnya baru dibuat setelah
 penyelesaian task sebelumnya terdeteksi, sehingga node PC 2 punya jeda kosong antar task. Beban k3s server dan
 `run_plan.py` di vm-a1 juga dapat memperlambat PC 1.
+
+Catatan: run pertama 400 task terganggu karena `start_batch2.sh` terpanggil tiga kali sehingga tiga batch berjalan
+bersamaan (hasil 2767 detik, selisih 130,6%). Hasil itu dibuang dan 400 task diulang dengan satu batch (tabel di
+atas). `start_batch2.sh` kini menolak berjalan bila batch masih aktif.
+
+## Grafik
+
+    python3 buat_grafik_realworld.py
+
+Membaca `hasil_ringkas.txt` dan `hasil_ringkas_2.txt`, lalu menulis empat PNG ke folder `grafik/`:
+`1_prediksi_vs_aktual.png`, `2_utilisasi_node.png`, `3_selisih_vs_jumlah_task.png`, dan
+`4_selisih_vs_panjang_task.png` (100 task dengan panjang task berbeda). Panduan mengubah topologi (DC, host, VM) ada
+di `PANDUAN_UBAH_TOPOLOGI.md`.
+
+## Screenshot bukti
+
+Folder `resources/` berisi screenshot pengujian dari PC 1 dan PC 2; daftar isinya di `resources/README.md`.
 
 ## Setelah PC dimatikan atau di-restart
 
